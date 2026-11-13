@@ -10,8 +10,10 @@ import {
   CheckCircle2,
   CheckSquare,
   ChevronRight,
+  Clock,
   CornerLeftUp,
   Download,
+  Edit3,
   FileSearch,
   FileText,
   FileUp,
@@ -20,6 +22,7 @@ import {
   FolderPlus,
   Gauge,
   HardDrive,
+  History,
   Laptop,
   Layers,
   Lock,
@@ -38,6 +41,7 @@ import {
   Trash2,
   Wifi,
   WifiOff,
+  Zap,
 } from "lucide-react";
 import {
   Badge,
@@ -55,6 +59,8 @@ import type {
   DiscoveredPeer,
   DryRunPreviewResponse,
   ReceiverSystemInfo,
+  RouteQualityInfo,
+  TransferHistoryEntry,
   TransferProgress,
 } from "../shared/types.ts";
 
@@ -113,12 +119,17 @@ type SortKey = "name" | "size" | "mtime";
 function filterAndSortEntries(
   entries: DirectoryEntry[],
   query: string,
-  sortBy: SortKey
+  sortBy: SortKey,
+  onlyRecent24h = false
 ): DirectoryEntry[] {
   const q = query.trim().toLowerCase();
-  const filtered = q
-    ? entries.filter((e) => e.name.toLowerCase().includes(q))
-    : [...entries];
+  const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+
+  const filtered = entries.filter((e) => {
+    if (q && !e.name.toLowerCase().includes(q)) return false;
+    if (onlyRecent24h && !e.isDirectory && e.mtime < cutoff24h) return false;
+    return true;
+  });
 
   filtered.sort((a, b) => {
     if (a.isDirectory !== b.isDirectory) {
@@ -173,15 +184,18 @@ function NovaShareOperatorDeck() {
   const [useSmartIgnore, setUseSmartIgnore] = useState(true);
   const [bandwidthLimitMBps, setBandwidthLimitMBps] = useState(0);
   const [concurrency, setConcurrency] = useState(4);
+  const [chunkSizeMB, setChunkSizeMB] = useState(16);
   const [profiles, setProfiles] = useState<BackupProfile[]>([]);
+  const [historyList, setHistoryList] = useState<TransferHistoryEntry[]>([]);
   const [newProfileName, setNewProfileName] = useState("");
   const [newProfileAutoSync, setNewProfileAutoSync] =
     useState<BackupProfile["autoSyncMode"]>("off");
 
-  // Auto-Discovery Peers (Tailscale & LAN)
+  // Auto-Discovery & Route Diagnostics
   const [peers, setPeers] = useState<DiscoveredPeer[]>([]);
   const [scanningPeers, setScanningPeers] = useState(false);
   const [showDiscoveryBar, setShowDiscoveryBar] = useState(false);
+  const [routeQuality, setRouteQuality] = useState<RouteQualityInfo | null>(null);
 
   // Remote Connection Status
   const [connStatus, setConnStatus] = useState<"idle" | "checking" | "online" | "offline">("idle");
@@ -189,12 +203,13 @@ function NovaShareOperatorDeck() {
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [connError, setConnError] = useState<string | null>(null);
 
-  // Inline Directory Explorers + Search & Sort
+  // Inline Directory Explorers + Search & Sort + 24h Filter
   const [localBrowse, setLocalBrowse] = useState<BrowseResponse | null>(null);
   const [localNewFolder, setLocalNewFolder] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
   const [localSearch, setLocalSearch] = useState("");
   const [localSort, setLocalSort] = useState<SortKey>("name");
+  const [localRecent24h, setLocalRecent24h] = useState(false);
 
   const [remoteBrowse, setRemoteBrowse] = useState<BrowseResponse | null>(null);
   const [remoteNewFolder, setRemoteNewFolder] = useState("");
@@ -202,43 +217,69 @@ function NovaShareOperatorDeck() {
   const [remoteSearch, setRemoteSearch] = useState("");
   const [remoteSort, setRemoteSort] = useState<SortKey>("name");
 
-  // Dry-Run Preview & Live Telemetry
+  // Dry-Run Preview, Live Telemetry & Speed History
   const [dryRunResult, setDryRunResult] = useState<DryRunPreviewResponse | null>(null);
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [progress, setProgress] = useState<TransferProgress>(INITIAL_PROGRESS);
-  const [bottomTab, setBottomTab] = useState<"logs" | "profiles">("logs");
+  const [speedSamples, setSpeedSamples] = useState<number[]>(Array(24).fill(0));
+  const [bottomTab, setBottomTab] = useState<"logs" | "profiles" | "history">("logs");
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  // Desktop Notification & Audio cue on job completion or network drop
+  // Desktop Notification & Audio cue + refresh history/remote explorer on completion
   useEffect(() => {
     const prev = prevStateRef.current;
     const curr = progress.state;
     prevStateRef.current = curr;
 
-    if (!notificationsEnabled || prev === curr) return;
+    if (prev === curr) return;
 
     if (curr === "COMPLETED" && prev === "TRANSFERRING") {
-      playNotificationTone("success");
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification("NovaShare — Backup 100% Selesai", {
-          body: `${progress.filesCompleted} file terkirim & terverifikasi SHA-256 (${progress.filesSkipped} di-skip).`,
-        });
+      if (notificationsEnabled) {
+        playNotificationTone("success");
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification("NovaShare — Backup 100% Selesai", {
+            body: `${progress.filesCompleted} file terkirim & terverifikasi SHA-256 (${progress.filesSkipped} di-skip).`,
+          });
+        }
       }
+      void refreshHistory();
+      void browseRemotePath(destinationDir);
     } else if (curr === "WAITING_FOR_NETWORK" || (curr === "ERROR" && prev !== "IDLE")) {
-      playNotificationTone("warning");
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification("NovaShare — Peringatan Koneksi", {
-          body:
-            curr === "WAITING_FOR_NETWORK"
-              ? "Koneksi Wi-Fi/Tailscale terputus. Menunggu jaringan pulih untuk Auto-Resume..."
-              : `Terjadi error: ${progress.errorMessage || "Periksa log"}`,
-        });
+      if (notificationsEnabled) {
+        playNotificationTone("warning");
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification("NovaShare — Peringatan Koneksi", {
+            body:
+              curr === "WAITING_FOR_NETWORK"
+                ? "Koneksi Wi-Fi/Tailscale terputus. Menunggu jaringan pulih untuk Auto-Resume..."
+                : `Terjadi error: ${progress.errorMessage || "Periksa log"}`,
+          });
+        }
       }
     }
-  }, [progress.state, notificationsEnabled, progress.filesCompleted, progress.filesSkipped, progress.errorMessage]);
+  }, [
+    progress.state,
+    notificationsEnabled,
+    progress.filesCompleted,
+    progress.filesSkipped,
+    progress.errorMessage,
+    destinationDir,
+  ]);
+
+  async function refreshHistory() {
+    try {
+      const res = await fetch("/api/history");
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.history)) {
+        setHistoryList(data.history);
+      }
+    } catch {
+      // Ignore
+    }
+  }
 
   // Initial config load + SSE stream
   useEffect(() => {
@@ -257,8 +298,10 @@ function NovaShareOperatorDeck() {
         setDestinationDir(dDir);
         setUseSmartIgnore(cfg.useSmartIgnore !== false);
         setBandwidthLimitMBps(cfg.bandwidthLimitMBps || 0);
-        setConcurrency(cfg.concurrency || 2);
+        setConcurrency(cfg.concurrency || 4);
+        setChunkSizeMB(cfg.chunkSizeMB || 16);
         setProfiles(Array.isArray(cfg.profiles) ? cfg.profiles : []);
+        setHistoryList(Array.isArray(cfg.history) ? cfg.history : []);
 
         await browseLocalPath(sDir || undefined);
         await verifyLinuxConnection(rUrl, rTok, dDir || undefined);
@@ -280,6 +323,10 @@ function NovaShareOperatorDeck() {
       try {
         const data = JSON.parse(ev.data) as TransferProgress;
         setProgress(data);
+        if (data.state === "TRANSFERRING") {
+          const mbps = Number(((data.speedBytesPerSec || 0) / (1024 * 1024)).toFixed(1));
+          setSpeedSamples((prev) => [...prev.slice(1), mbps]);
+        }
       } catch {
         // Ignore malformed frame
       }
@@ -298,6 +345,22 @@ function NovaShareOperatorDeck() {
       }
     } finally {
       setScanningPeers(false);
+    }
+  }
+
+  async function checkRouteQuality(targetUrl: string) {
+    try {
+      const res = await fetch("/api/discovery/route-quality", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receiverUrl: targetUrl }),
+      });
+      if (res.ok) {
+        const info = (await res.json()) as RouteQualityInfo;
+        setRouteQuality(info);
+      }
+    } catch {
+      // Ignore
     }
   }
 
@@ -433,7 +496,10 @@ function NovaShareOperatorDeck() {
       setRemoteInfo(data);
       setConnStatus("online");
       const targetDest = initialDest || destinationDir || data.defaultBackupDir;
-      await browseRemotePath(targetDest, rUrl, rTok);
+      await Promise.all([
+        browseRemotePath(targetDest, rUrl, rTok),
+        checkRouteQuality(rUrl),
+      ]);
     } catch (err) {
       setConnStatus("offline");
       setConnError(err instanceof Error ? err.message : String(err));
@@ -476,6 +542,41 @@ function NovaShareOperatorDeck() {
     }
   }
 
+  async function handleRemoteRename(entry: DirectoryEntry) {
+    const nextName = prompt(`Ubah nama "${entry.name}" menjadi:`, entry.name);
+    if (!nextName || !nextName.trim() || nextName.trim() === entry.name) return;
+
+    await fetch("/api/remote/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        receiverUrl: receiverUrl.trim(),
+        token: token.trim(),
+        oldPath: entry.path,
+        newPath: nextName.trim(),
+      }),
+    });
+    await browseRemotePath(remoteBrowse?.currentPath || destinationDir);
+  }
+
+  async function handleRemoteDelete(entry: DirectoryEntry) {
+    const ok = confirm(
+      `Hapus ${entry.isDirectory ? "folder beserta seluruh isinya" : "file"} "${entry.name}" di RECEIVER?`
+    );
+    if (!ok) return;
+
+    await fetch("/api/remote/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        receiverUrl: receiverUrl.trim(),
+        token: token.trim(),
+        path: entry.path,
+      }),
+    });
+    await browseRemotePath(remoteBrowse?.currentPath || destinationDir);
+  }
+
   async function handleDryRunPreview() {
     setDryRunLoading(true);
     try {
@@ -489,6 +590,7 @@ function NovaShareOperatorDeck() {
           receiverUrl: receiverUrl.trim(),
           token: token.trim(),
           useSmartIgnore,
+          chunkSize: chunkSizeMB * 1024 * 1024,
         }),
       });
       const data = await res.json();
@@ -514,6 +616,7 @@ function NovaShareOperatorDeck() {
         useSmartIgnore,
         bandwidthLimitMBps,
         concurrency,
+        chunkSize: chunkSizeMB * 1024 * 1024,
       }),
     });
   }
@@ -579,6 +682,12 @@ function NovaShareOperatorDeck() {
     setProfiles(cfg.profiles || []);
   }
 
+  async function handleClearHistory() {
+    const res = await fetch("/api/history", { method: "DELETE" });
+    const data = await res.json();
+    setHistoryList(data.history || []);
+  }
+
   function applyProfile(p: BackupProfile) {
     setSourceDir(p.sourceDir);
     setDestinationDir(p.destinationDir);
@@ -586,7 +695,7 @@ function NovaShareOperatorDeck() {
     setToken(p.token);
     setUseSmartIgnore(p.useSmartIgnore);
     setBandwidthLimitMBps(p.bandwidthLimitMBps || 0);
-    setConcurrency(p.concurrency || 2);
+    setConcurrency(p.concurrency || 4);
     void browseLocalPath(p.sourceDir);
     void verifyLinuxConnection(p.receiverUrl, p.token, p.destinationDir);
   }
@@ -641,10 +750,12 @@ function NovaShareOperatorDeck() {
     isJobRunning,
   ]);
 
+  const maxSpeedSample = Math.max(10, ...speedSamples);
+
   const rawLocalEntries = localBrowse?.entries || [];
   const localEntries = useMemo(
-    () => filterAndSortEntries(rawLocalEntries, localSearch, localSort),
-    [rawLocalEntries, localSearch, localSort]
+    () => filterAndSortEntries(rawLocalEntries, localSearch, localSort, localRecent24h),
+    [rawLocalEntries, localSearch, localSort, localRecent24h]
   );
   const localDirsCount = rawLocalEntries.filter((e: DirectoryEntry) => e.isDirectory).length;
   const localFilesCount = rawLocalEntries.length - localDirsCount;
@@ -745,6 +856,30 @@ function NovaShareOperatorDeck() {
           <Separator orientation="vertical" className="ns-topbar__sep" />
 
           <div className="ns-status-chip">
+            {connStatus === "online" && routeQuality && (
+              <Badge
+                variant={
+                  routeQuality.routeKind === "DIRECT_LAN"
+                    ? "success"
+                    : routeQuality.routeKind === "TAILSCALE_RELAY"
+                    ? "warning"
+                    : "outline"
+                }
+                title="Rute jaringan aktif & latensi"
+              >
+                <Zap className="ns-icon-xs" />
+                <span className="ns-tabular">
+                  {routeQuality.routeKind === "DIRECT_LAN"
+                    ? `Direct LAN • ${routeQuality.latencyMs}ms`
+                    : routeQuality.routeKind === "TAILSCALE_RELAY"
+                    ? `Tailscale Relay (${routeQuality.relayCode || "DERP"}) • ${routeQuality.latencyMs}ms`
+                    : routeQuality.routeKind === "LOCAL"
+                    ? `Localhost • ${routeQuality.latencyMs}ms`
+                    : `Tailscale P2P • ${routeQuality.latencyMs}ms`}
+                </span>
+              </Badge>
+            )}
+
             {connStatus === "online" ? (
               <Badge variant="success" className="ns-conn-badge">
                 <Wifi className="ns-icon-xs" />
@@ -795,6 +930,28 @@ function NovaShareOperatorDeck() {
         </div>
       </header>
 
+      {/* Smart Faster Route Recommendation Banner */}
+      {routeQuality?.fasterUrlAvailable && (
+        <div className="ns-fast-route-banner" role="status">
+          <span>
+            ⚡ Jalur Direct LAN lebih cepat terdeteksi untuk <b>{receiverHost}</b>:{" "}
+            <code>{routeQuality.fasterUrlAvailable}</code> (Tanpa overhead enkripsi/relay Tailscale)
+          </span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              const fast = routeQuality.fasterUrlAvailable!;
+              setReceiverUrl(fast);
+              void verifyLinuxConnection(fast, token);
+            }}
+          >
+            <Zap className="ns-icon-xs" />
+            <span>Pindah ke Jalur Cepat</span>
+          </Button>
+        </div>
+      )}
+
       {/* Auto-Discovered Tailscale & LAN Peers Strip */}
       {showDiscoveryBar && (
         <div className="ns-discovery-bar" role="region" aria-label="Perangkat Tailscale dan LAN">
@@ -809,7 +966,7 @@ function NovaShareOperatorDeck() {
           ) : (
             peers.map((peer) => (
               <button
-                key={peer.ip}
+                key={`${peer.source}-${peer.ip}`}
                 type="button"
                 className={`ns-peer-pill ${
                   peer.novaShareActive ? "ns-peer-pill--active" : ""
@@ -938,7 +1095,7 @@ function NovaShareOperatorDeck() {
                 </div>
               </div>
 
-              {/* Search, Sort & Select-All Bar */}
+              {/* Search, Sort, 24h Filter & Select-All Bar */}
               <div className="ns-explorer__filter">
                 <div className="ns-search-wrap">
                   <Search className="ns-search-wrap__icon" />
@@ -950,6 +1107,15 @@ function NovaShareOperatorDeck() {
                     className="ns-input--search"
                   />
                 </div>
+                <Button
+                  variant={localRecent24h ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setLocalRecent24h(!localRecent24h)}
+                  title="Tampilkan hanya file yang diubah dalam 24 jam terakhir"
+                >
+                  <Clock className="ns-icon-xs" />
+                  <span>24 Jam</span>
+                </Button>
                 <Select
                   value={localSort}
                   onChange={(e) => setLocalSort(e.target.value as SortKey)}
@@ -968,7 +1134,7 @@ function NovaShareOperatorDeck() {
                   title="Pilih atau batalkan semua item di daftar ini"
                 >
                   <CheckSquare className="ns-icon-xs" />
-                  <span>{allFilteredSelected ? "Reset" : "Pilih Semua"}</span>
+                  <span>{allFilteredSelected ? "Reset" : "Semua"}</span>
                 </Button>
               </div>
 
@@ -992,8 +1158,8 @@ function NovaShareOperatorDeck() {
               <div className="ns-explorer__list" role="region" aria-label="Daftar folder dan file SENDER">
                 {localEntries.length === 0 ? (
                   <div className="ns-explorer__empty">
-                    {localSearch
-                      ? `Tidak ada item yang cocok dengan pencarian "${localSearch}".`
+                    {localSearch || localRecent24h
+                      ? "Tidak ada item yang cocok dengan filter pencarian."
                       : "Direktori ini kosong (0 folder, 0 file)."}
                   </div>
                 ) : (
@@ -1147,18 +1313,18 @@ function NovaShareOperatorDeck() {
 
             <Progress value={progressPercent} ariaLabel="Progres total backup" />
 
-            {/* Dual-Lane Signal Matrix (48 Whole Cells) */}
+            {/* Dual-Lane Signal Matrix + 24-Sample Speed Histogram */}
             <div className="ns-matrix-block">
               <div className="ns-matrix-block__header">
                 <span className="ns-matrix-block__title">
                   <ShieldCheck className="ns-icon-xs ns-text-success" />
-                  <span>SHA-256 Chunk &amp; Micro-Batch Signal Matrix</span>
+                  <span>SHA-256 Signal Matrix &amp; Throughput</span>
                 </span>
                 <span className="ns-matrix-block__legend ns-tabular">
                   {progress.currentLane === "BATCH"
                     ? `Jalur A: Micro-Batch (<8MB)`
                     : progress.currentLane === "CHUNK"
-                    ? `Jalur B: 8MB Stream • ${progress.currentChunkInfo || ""}`
+                    ? `Jalur B: ${chunkSizeMB}MB Stream • ${progress.currentChunkInfo || ""}`
                     : "Menunggu Instruksi"}
                 </span>
               </div>
@@ -1172,12 +1338,25 @@ function NovaShareOperatorDeck() {
                 ))}
               </div>
 
+              <div className="ns-speed-bars" aria-hidden="true" title="Grafik kestabilan kecepatan real-time">
+                {speedSamples.map((val, idx) => {
+                  const hPct = Math.max(8, Math.min(100, Math.round((val / maxSpeedSample) * 100)));
+                  return (
+                    <div
+                      key={idx}
+                      className="ns-speed-bar"
+                      style={{ height: `${hPct}%`, opacity: val > 0 ? 0.9 : 0.2 }}
+                    />
+                  );
+                })}
+              </div>
+
               <div className="ns-active-stream ns-mono">
                 <span className="ns-active-stream__path">
                   {progress.currentFile ||
                     (progress.state === "COMPLETED"
-                      ? "Seluruh paket & chunk 8MB selesai diverifikasi tanpa korup."
-                      : "Pilih folder/file lalu tekan Mulai Backup atau Cek Perubahan.")}
+                      ? "Seluruh paket & chunk selesai diverifikasi tanpa korup."
+                      : "Pilih folder/file lalu tekan Mulai Backup atau Dry-Run.")}
                 </span>
               </div>
             </div>
@@ -1236,38 +1415,52 @@ function NovaShareOperatorDeck() {
               </div>
             </div>
 
-            {/* Engine Controls: Bandwidth & Concurrency */}
-            <div className="ns-engine-controls">
+            {/* Engine Controls: Bandwidth, Concurrency & Turbo Chunk Size */}
+            <div className="ns-engine-controls--three">
               <div className="ns-control-col">
                 <label className="ns-field-label" htmlFor="bandwidth-select">
-                  Batas Kecepatan Wi-Fi
+                  Batas Kecepatan
                 </label>
                 <Select
                   id="bandwidth-select"
                   value={String(bandwidthLimitMBps)}
                   onChange={(e) => handleBandwidthChange(Number(e.target.value))}
                 >
-                  <option value="0">Tanpa Batas (Full Line Rate)</option>
-                  <option value="10">10 MB/s (Mode Rapat / Hemat Wi-Fi)</option>
-                  <option value="25">25 MB/s (Seimbang)</option>
-                  <option value="50">50 MB/s (High Throughput)</option>
+                  <option value="0">Full Speed</option>
+                  <option value="10">10 MB/s</option>
+                  <option value="25">25 MB/s</option>
+                  <option value="50">50 MB/s</option>
                 </Select>
               </div>
 
               <div className="ns-control-col">
                 <label className="ns-field-label" htmlFor="concurrency-select">
-                  Worker Stream Paralel
+                  Stream Paralel
                 </label>
                 <Select
                   id="concurrency-select"
                   value={String(concurrency)}
                   onChange={(e) => setConcurrency(Number(e.target.value))}
                 >
-                  <option value="1">1 Stream Sekuensial</option>
-                  <option value="2">2 Streams Paralel</option>
-                  <option value="4">4 Streams Paralel (Rekomendasi)</option>
-                  <option value="8">8 Streams Paralel (Turbo Wi-Fi / LAN)</option>
-                  <option value="12">12 Streams Paralel (Max Throughput)</option>
+                  <option value="2">2 Streams</option>
+                  <option value="4">4 Streams (Default)</option>
+                  <option value="8">8 Streams (Turbo)</option>
+                  <option value="12">12 Streams (Max)</option>
+                </Select>
+              </div>
+
+              <div className="ns-control-col">
+                <label className="ns-field-label" htmlFor="chunksize-select">
+                  Ukuran Chunk
+                </label>
+                <Select
+                  id="chunksize-select"
+                  value={String(chunkSizeMB)}
+                  onChange={(e) => setChunkSizeMB(Number(e.target.value))}
+                >
+                  <option value="8">8 MB (Standar)</option>
+                  <option value="16">16 MB (Turbo &gt;1GB)</option>
+                  <option value="32">32 MB (Ultra LAN)</option>
                 </Select>
               </div>
             </div>
@@ -1336,7 +1529,7 @@ function NovaShareOperatorDeck() {
               </Button>
             </div>
 
-            {/* Bottom Console Drawer: Verification Audit Log & Saved Profiles */}
+            {/* Bottom Console Drawer: Logs, Profiles & Transfer History */}
             <div className="ns-drawer">
               <div className="ns-drawer__tabs" role="tablist">
                 <button
@@ -1347,7 +1540,7 @@ function NovaShareOperatorDeck() {
                   onClick={() => setBottomTab("logs")}
                 >
                   <Terminal className="ns-icon-xs" />
-                  <span>Log Verifikasi SHA-256</span>
+                  <span>Log SHA-256</span>
                 </button>
                 <button
                   type="button"
@@ -1361,13 +1554,28 @@ function NovaShareOperatorDeck() {
                   <Bookmark className="ns-icon-xs" />
                   <span>Profil &amp; Auto-Sync ({profiles.length})</span>
                 </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={bottomTab === "history"}
+                  className={`ns-tab-btn ${
+                    bottomTab === "history" ? "ns-tab-btn--active" : ""
+                  }`}
+                  onClick={() => {
+                    setBottomTab("history");
+                    void refreshHistory();
+                  }}
+                >
+                  <History className="ns-icon-xs" />
+                  <span>Riwayat Backup ({historyList.length})</span>
+                </button>
               </div>
 
               {bottomTab === "logs" ? (
                 <pre className="ns-log-terminal ns-mono" aria-live="polite">
                   {(progress.recentLogs || []).join("\n")}
                 </pre>
-              ) : (
+              ) : bottomTab === "profiles" ? (
                 <div className="ns-profiles-pane">
                   <div className="ns-profiles-pane__add">
                     <Input
@@ -1400,7 +1608,7 @@ function NovaShareOperatorDeck() {
                   <div className="ns-profiles-list">
                     {profiles.length === 0 ? (
                       <div className="ns-explorer__empty">
-                        Belum ada profil tersimpan. Pilih folder SENDER &amp; RECEIVER lalu simpan (bisa dijadwalkan Auto-Sync).
+                        Belum ada profil tersimpan. Pilih folder SENDER &amp; RECEIVER lalu simpan.
                       </div>
                     ) : (
                       profiles.map((prof) => (
@@ -1448,6 +1656,41 @@ function NovaShareOperatorDeck() {
                       ))
                     )}
                   </div>
+                </div>
+              ) : (
+                <div className="ns-profiles-pane">
+                  <div className="ns-profiles-list">
+                    {historyList.length === 0 ? (
+                      <div className="ns-explorer__empty">
+                        Belum ada riwayat transfer yang selesai.
+                      </div>
+                    ) : (
+                      historyList.map((h) => (
+                        <div key={h.id} className="ns-profile-row">
+                          <div className="ns-profile-row__info">
+                            <span className="ns-profile-row__name ns-tabular">
+                              {new Date(h.finishedAt).toLocaleString("id-ID")} •{" "}
+                              {formatBytes(h.bytesTransferred)} ({h.filesTransferred} file)
+                            </span>
+                            <span className="ns-profile-row__paths ns-mono">
+                              {h.sourceDir} ➔ {h.destinationDir}
+                            </span>
+                          </div>
+                          <div className="ns-profile-row__actions ns-tabular">
+                            <Badge variant="success">{h.avgSpeedMBps} MB/s</Badge>
+                            <Badge variant="outline">{h.durationSec}d</Badge>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  {historyList.length > 0 && (
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <Button variant="ghost" size="sm" onClick={handleClearHistory}>
+                        Bersihkan Riwayat
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1657,17 +1900,37 @@ function NovaShareOperatorDeck() {
                         </span>
                       </button>
 
-                      {!entry.isDirectory && (
-                        <a
-                          href={buildReceiverDownloadUrl(entry.path)}
-                          className="ns-download-link"
-                          title={`Unduh ${entry.name} dari RECEIVER ke komputer ini`}
-                          download={entry.name}
+                      <div className="ns-row-actions">
+                        {!entry.isDirectory && (
+                          <a
+                            href={buildReceiverDownloadUrl(entry.path)}
+                            className="ns-download-link"
+                            title={`Unduh ${entry.name} dari RECEIVER`}
+                            download={entry.name}
+                          >
+                            <Download className="ns-icon-xs" />
+                            <span>Unduh</span>
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          className="ns-row-icon-btn"
+                          onClick={() => handleRemoteRename(entry)}
+                          title={`Ubah nama ${entry.name}`}
+                          aria-label={`Ubah nama ${entry.name}`}
                         >
-                          <Download className="ns-icon-xs" />
-                          <span>Unduh</span>
-                        </a>
-                      )}
+                          <Edit3 className="ns-icon-xs" />
+                        </button>
+                        <button
+                          type="button"
+                          className="ns-row-icon-btn ns-row-icon-btn--danger"
+                          onClick={() => handleRemoteDelete(entry)}
+                          title={`Hapus ${entry.name} di RECEIVER`}
+                          aria-label={`Hapus ${entry.name}`}
+                        >
+                          <Trash2 className="ns-icon-xs" />
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -1688,7 +1951,7 @@ function NovaShareOperatorDeck() {
               <div>
                 <strong>1:1 Native Filesystem &amp; Atomic Resume</strong>
                 <p>
-                  File ditulis sebagai <code>.novapart</code> per 8MB dan otomatis berganti nama ke file asli setelah hash SHA-256 cocok.
+                  File ditulis sebagai <code>.novapart</code> dan otomatis berganti nama ke file asli setelah hash SHA-256 cocok.
                 </p>
               </div>
             </div>

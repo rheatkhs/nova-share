@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DEFAULT_RECEIVER_PORT, DEFAULT_TOKEN } from "../shared/constants.ts";
-import type { BackupProfile } from "../shared/types.ts";
+import type { BackupProfile, TransferHistoryEntry } from "../shared/types.ts";
 
 export interface SenderConfigData {
   receiverUrl: string;
@@ -13,7 +13,9 @@ export interface SenderConfigData {
   customIgnore: string[];
   bandwidthLimitMBps: number;
   concurrency: number;
+  chunkSizeMB: number;
   profiles: BackupProfile[];
+  history: TransferHistoryEntry[];
 }
 
 const CONFIG_FILE_PATH = path.resolve(process.cwd(), ".novashare-config.json");
@@ -27,8 +29,10 @@ function createDefaultConfig(): SenderConfigData {
     useSmartIgnore: true,
     customIgnore: [],
     bandwidthLimitMBps: 0,
-    concurrency: 2,
+    concurrency: 4,
+    chunkSizeMB: 16,
     profiles: [],
+    history: [],
   };
 }
 
@@ -40,6 +44,7 @@ export async function loadSenderConfig(): Promise<SenderConfigData> {
       ...createDefaultConfig(),
       ...parsed,
       profiles: Array.isArray(parsed.profiles) ? parsed.profiles : [],
+      history: Array.isArray(parsed.history) ? parsed.history : [],
     };
   } catch {
     return createDefaultConfig();
@@ -54,6 +59,7 @@ export async function saveSenderConfig(
     ...current,
     ...update,
     profiles: update.profiles ?? current.profiles,
+    history: update.history ?? current.history,
   };
   await fs.writeFile(CONFIG_FILE_PATH, JSON.stringify(merged, null, 2), "utf8");
   return merged;
@@ -74,4 +80,16 @@ export async function deleteBackupProfile(profileId: string): Promise<SenderConf
   const current = await loadSenderConfig();
   const filtered = current.profiles.filter((p) => p.id !== profileId);
   return saveSenderConfig({ profiles: filtered });
+}
+
+export async function appendTransferHistory(
+  entry: TransferHistoryEntry
+): Promise<SenderConfigData> {
+  const current = await loadSenderConfig();
+  const nextHistory = [entry, ...current.history].slice(0, 50);
+  return saveSenderConfig({ history: nextHistory });
+}
+
+export async function clearTransferHistory(): Promise<SenderConfigData> {
+  return saveSenderConfig({ history: [] });
 }

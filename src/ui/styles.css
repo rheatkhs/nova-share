@@ -1360,3 +1360,84 @@ a {
   padding: 0 6px;
   font-size: 0.6875rem;
 }
+
+/* ==========================================================================
+   v1.3 Turbo & Operator Suite: Speed Histogram, 3-Col Controls, Remote Actions
+   ========================================================================== */
+
+.ns-engine-controls--three {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .ns-engine-controls--three {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ns-speed-bars {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  align-items: end;
+  gap: 3px;
+  height: 26px;
+  padding-top: 4px;
+}
+
+.ns-speed-bar {
+  background-color: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ns-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ns-row-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color 140ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ns-row-icon-btn:hover {
+  background-color: var(--bg-surface);
+  border-color: var(--border-strong);
+  color: var(--fg-primary);
+}
+
+.ns-row-icon-btn--danger:hover {
+  background-color: var(--destructive-soft);
+  border-color: var(--destructive);
+  color: var(--destructive);
+}
+
+.ns-fast-route-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background-color: var(--success-soft);
+  color: var(--success);
+  border: 1px solid var(--success);
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 14px;
+}

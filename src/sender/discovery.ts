@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import { DEFAULT_RECEIVER_PORT } from "../shared/constants.ts";
-import type { DiscoveredPeer } from "../shared/types.ts";
+import type { DiscoveredPeer, RouteKind, RouteQualityInfo } from "../shared/types.ts";
 
 function timeoutAfter<T>(ms: number, fallback: T): Promise<T> {
   const { promise, resolve } = Promise.withResolvers<T>();
@@ -168,4 +168,124 @@ export async function discoverPeers(
   });
 
   return peerList;
+}
+
+/**
+ * Measures route latency and inspects Tailscale vs Direct LAN routing for a given Receiver URL.
+ * Also checks if a faster alternate route (e.g. Direct LAN 192.168.x.x instead of Tailscale 100.x.y.z,
+ * or Tailscale fallback when Direct LAN is unreachable) is available.
+ */
+export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQualityInfo> {
+  const cleanUrl = receiverUrl.trim().replace(/\/+$/, "");
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(cleanUrl);
+  } catch {
+    return {
+      currentUrl: cleanUrl,
+      routeKind: "DIRECT_LAN",
+      latencyMs: 0,
+    };
+  }
+
+  const host = parsedUrl.hostname;
+  const port = Number(parsedUrl.port || DEFAULT_RECEIVER_PORT);
+
+  // Measure HTTP latency to currentUrl
+  const t0 = performance.now();
+  const currentReachable = await probeNovaShareReceiver(cleanUrl, 900);
+  const latencyMs = currentReachable ? Math.max(1, Math.round(performance.now() - t0)) : 0;
+
+  if (host === "127.0.0.1" || host === "localhost") {
+    return {
+      currentUrl: cleanUrl,
+      routeKind: "LOCAL",
+      latencyMs,
+    };
+  }
+
+  // Query Tailscale JSON to see if host matches a Tailscale peer or its CurAddr LAN IP
+  let routeKind: RouteKind = host.startsWith("100.") ? "TAILSCALE_DIRECT" : "DIRECT_LAN";
+  let relayCode: string | undefined;
+  let directLanUrl: string | undefined;
+  let tailscaleUrl: string | undefined;
+
+  try {
+    const proc = Bun.spawn(["tailscale", "status", "--json"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const text = await Promise.race([
+      new Response(proc.stdout).text(),
+      timeoutAfter(800, ""),
+    ]);
+    if (text.trim().startsWith("{")) {
+      const parsed = JSON.parse(text) as {
+        Peer?: Record<
+          string,
+          {
+            TailscaleIPs?: string[];
+            CurAddr?: string;
+            Relay?: string;
+          }
+        >;
+      };
+      for (const peer of Object.values(parsed.Peer || {})) {
+        const tsIp = (peer.TailscaleIPs || []).find((ip) => !ip.includes(":"));
+        const curLanIp = peer.CurAddr ? peer.CurAddr.split(":")[0] : "";
+        if (tsIp === host || curLanIp === host) {
+          if (tsIp) {
+            tailscaleUrl = `http://${tsIp}:${port}`;
+          }
+          if (
+            curLanIp &&
+            (curLanIp.startsWith("192.168.") ||
+              curLanIp.startsWith("10.") ||
+              curLanIp.startsWith("172."))
+          ) {
+            directLanUrl = `http://${curLanIp}:${port}`;
+          }
+          if (host === tsIp) {
+            if (!curLanIp && peer.Relay) {
+              routeKind = "TAILSCALE_RELAY";
+              relayCode = peer.Relay;
+            } else {
+              routeKind = "TAILSCALE_DIRECT";
+            }
+          }
+          break;
+        }
+      }
+    }
+  } catch {
+    // Ignore
+  }
+
+  let fasterUrlAvailable: string | undefined;
+
+  // Case 1: User is on Tailscale IP, check if Direct LAN URL is reachable!
+  if (routeKind !== "DIRECT_LAN" && directLanUrl && directLanUrl !== cleanUrl) {
+    const lanOk = await probeNovaShareReceiver(directLanUrl, 450);
+    if (lanOk) {
+      fasterUrlAvailable = directLanUrl;
+    }
+  }
+
+  // Case 2: User is on Direct LAN IP, but it's unreachable (e.g. away from office) -> check Tailscale fallback!
+  if (!currentReachable && tailscaleUrl && tailscaleUrl !== cleanUrl) {
+    const tsOk = await probeNovaShareReceiver(tailscaleUrl, 650);
+    if (tsOk) {
+      fasterUrlAvailable = tailscaleUrl;
+    }
+  }
+
+  return {
+    currentUrl: cleanUrl,
+    routeKind,
+    latencyMs,
+    relayCode,
+    directLanUrl,
+    tailscaleUrl,
+    fasterUrlAvailable,
+  };
 }
