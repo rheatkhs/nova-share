@@ -13,6 +13,7 @@ novashare-linux
 *.novapart.meta.json
 .tmp-test/
 
+.impeccable/review/
 # Environment & Logs
 .env
 .env.*
