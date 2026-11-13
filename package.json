@@ -4,7 +4,8 @@
   "description": "High-Throughput, Zero-Corruption Cross-Platform Backup & File Transfer Engine (Windows Laptop -> Linux Omarchy PC)",
   "type": "module",
   "scripts": {
-    "dev": "bun run src/index.ts --dual",
+    "dev": "bun --watch run src/index.ts --sender",
+    "dev:dual": "bun --watch run src/index.ts --dual",
     "start:sender": "bun run src/index.ts --sender",
     "start:receiver": "bun run src/index.ts --receiver",
     "test": "bun test",
