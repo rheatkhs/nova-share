@@ -1,15 +1,15 @@
-import htmlText from "./index.html" with { type: "text" };
-import cssText from "./styles.css" with { type: "text" };
-import jsText from "./app.js" with { type: "text" };
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 /**
- * Returns embedded Web UI assets (works both via `bun run` and inside
- * standalone compiled executables created with `bun build --compile`).
+ * Loads the Web UI assets (`index.html`, `styles.css`, `app.js`).
  */
 export async function loadUiAssets(): Promise<{ html: string; css: string; js: string }> {
-  return {
-    html: String(htmlText),
-    css: String(cssText),
-    js: String(jsText),
-  };
+  const uiDir = path.resolve(import.meta.dir);
+  const [html, css, js] = await Promise.all([
+    fs.readFile(path.join(uiDir, "index.html"), "utf8"),
+    fs.readFile(path.join(uiDir, "styles.css"), "utf8"),
+    fs.readFile(path.join(uiDir, "app.js"), "utf8"),
+  ]);
+  return { html, css, js };
 }

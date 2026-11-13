@@ -48,6 +48,7 @@ export function startSenderServer(options: SenderServerOptions = {}): {
   const server = Bun.serve({
     port,
     hostname,
+    idleTimeout: 255,
     async fetch(req: Request): Promise<Response> {
       if (req.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: CORS_HEADERS });

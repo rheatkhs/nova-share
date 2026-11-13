@@ -53,7 +53,10 @@ export class TransferManager {
     currentLane: null,
     currentChunkInfo: null,
     errorMessage: null,
-    recentLogs: [],
+    recentLogs: [
+      "[SYSTEM] Dual-Lane Engine siap (Jalur A: Micro-Batch <8MB | Jalur B: Chunk Stream 8MB + SHA-256).",
+      "[SYSTEM] Pilih folder sumber Windows & tujuan Linux Omarchy, lalu klik Mulai Backup.",
+    ],
   };
 
   private listeners = new Set<ProgressListener>();
