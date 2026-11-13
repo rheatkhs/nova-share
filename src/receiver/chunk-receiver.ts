@@ -24,7 +24,13 @@ export interface CompleteChunkFileParams {
   sourceMtime: number;
 }
 
-// Per-file mutex lock to avoid race conditions when parallel workers write chunks to the same file
+interface ActivePartSession {
+  handle: fs.FileHandle;
+  meta: ChunkMetaFile;
+  completedSet: Set<number>;
+}
+
+const activeSessions = new Map<string, ActivePartSession>();
 const fileLocks = new Map<string, Promise<void>>();
 
 async function withFileLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -42,31 +48,39 @@ async function withFileLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/**
- * Verifies a single 8MB chunk's SHA-256 hash, writes it at the exact byte offset
- * inside `<filename>.novapart`, and updates `<filename>.novapart.meta.json`.
- */
-export async function receiveFileChunk(params: ReceiveChunkParams): Promise<{
-  chunkIndex: number;
-  completedCount: number;
-  totalChunks: number;
-}> {
-  const actualHash = hashBuffer(params.data);
-  if (!safeCompareHex(actualHash, params.expectedHash)) {
-    throw new Error(
-      `HASH_MISMATCH: Chunk ${params.chunkIndex} of "${params.relativePath}" corrupted in transit (expected ${params.expectedHash}, got ${actualHash})`
-    );
+async function getOrCreateSession(
+  partFile: string,
+  metaFile: string,
+  targetFile: string,
+  relPath: string,
+  params: ReceiveChunkParams
+): Promise<ActivePartSession> {
+  const existing = activeSessions.get(partFile);
+  if (
+    existing &&
+    existing.meta.totalSize === params.totalSize &&
+    existing.meta.chunkSize === params.chunkSize
+  ) {
+    return existing;
   }
 
-  const relPath = toPosixRelative(params.relativePath);
-  const targetFile = resolveSafeChildPath(params.destinationDir, relPath);
-  const partFile = `${targetFile}.novapart`;
-  const metaFile = `${targetFile}.novapart.meta.json`;
+  return withFileLock(`init:${partFile}`, async () => {
+    const doubleCheck = activeSessions.get(partFile);
+    if (
+      doubleCheck &&
+      doubleCheck.meta.totalSize === params.totalSize &&
+      doubleCheck.meta.chunkSize === params.chunkSize
+    ) {
+      return doubleCheck;
+    }
 
-  return withFileLock(partFile, async () => {
+    if (doubleCheck) {
+      await doubleCheck.handle.close().catch(() => {});
+      activeSessions.delete(partFile);
+    }
+
     await fs.mkdir(path.dirname(targetFile), { recursive: true });
 
-    // Open existing .novapart or create it without truncating existing chunks
     let handle: fs.FileHandle;
     try {
       handle = await fs.open(partFile, "r+");
@@ -74,13 +88,6 @@ export async function receiveFileChunk(params: ReceiveChunkParams): Promise<{
       handle = await fs.open(partFile, "w+");
     }
 
-    try {
-      await handle.write(params.data, 0, params.data.byteLength, params.offset);
-    } finally {
-      await handle.close();
-    }
-
-    // Load or initialize chunk metadata state
     let meta: ChunkMetaFile;
     try {
       const raw = await fs.readFile(metaFile, "utf8");
@@ -108,25 +115,72 @@ export async function receiveFileChunk(params: ReceiveChunkParams): Promise<{
       };
     }
 
-    if (!meta.completedChunks.includes(params.chunkIndex)) {
-      meta.completedChunks.push(params.chunkIndex);
+    const session: ActivePartSession = {
+      handle,
+      meta,
+      completedSet: new Set(meta.completedChunks),
+    };
+    activeSessions.set(partFile, session);
+    return session;
+  });
+}
+
+/**
+ * Verifies a single 8MB chunk's SHA-256 hash, writes it concurrently at the exact byte offset
+ * inside the cached `<filename>.novapart` descriptor, and updates `<filename>.novapart.meta.json`.
+ */
+export async function receiveFileChunk(params: ReceiveChunkParams): Promise<{
+  chunkIndex: number;
+  completedCount: number;
+  totalChunks: number;
+}> {
+  const actualHash = hashBuffer(params.data);
+  if (!safeCompareHex(actualHash, params.expectedHash)) {
+    throw new Error(
+      `HASH_MISMATCH: Chunk ${params.chunkIndex} of "${params.relativePath}" corrupted in transit (expected ${params.expectedHash}, got ${actualHash})`
+    );
+  }
+
+  const relPath = toPosixRelative(params.relativePath);
+  const targetFile = resolveSafeChildPath(params.destinationDir, relPath);
+  const partFile = `${targetFile}.novapart`;
+  const metaFile = `${targetFile}.novapart.meta.json`;
+
+  const session = await getOrCreateSession(partFile, metaFile, targetFile, relPath, params);
+
+  // Concurrent positional write (pwrite) without blocking other non-overlapping chunks
+  await session.handle.write(params.data, 0, params.data.byteLength, params.offset);
+
+  // Synchronize metadata update & flush
+  return withFileLock(`meta:${partFile}`, async () => {
+    if (!session.completedSet.has(params.chunkIndex)) {
+      session.completedSet.add(params.chunkIndex);
+      session.meta.completedChunks.push(params.chunkIndex);
     }
 
-    await fs.writeFile(metaFile, JSON.stringify(meta), "utf8");
+    // Flush .meta.json every 4 chunks or on the final chunk to reduce disk IOPS overhead
+    if (
+      session.completedSet.size === session.meta.totalChunks ||
+      session.completedSet.size % 4 === 0 ||
+      session.completedSet.size === 1
+    ) {
+      await fs.writeFile(metaFile, JSON.stringify(session.meta), "utf8");
+    }
 
     return {
       chunkIndex: params.chunkIndex,
-      completedCount: meta.completedChunks.length,
-      totalChunks: meta.totalChunks,
+      completedCount: session.completedSet.size,
+      totalChunks: session.meta.totalChunks,
     };
   });
 }
 
 /**
  * Finalizes a chunked transfer:
- * 1. Verifies all chunks were received and `.novapart` size equals `totalSize`
- * 2. Atomically renames `<file>.novapart` -> `<file>`
- * 3. Preserves original `mtime` and deletes `.novapart.meta.json`
+ * 1. Closes cached FileHandle and flushes metadata
+ * 2. Verifies all chunks were received and `.novapart` size equals `totalSize`
+ * 3. Atomically renames `<file>.novapart` -> `<file>`
+ * 4. Preserves original `mtime` and deletes `.novapart.meta.json`
  */
 export async function completeChunkedFile(params: CompleteChunkFileParams): Promise<{
   relativePath: string;
@@ -137,7 +191,32 @@ export async function completeChunkedFile(params: CompleteChunkFileParams): Prom
   const partFile = `${targetFile}.novapart`;
   const metaFile = `${targetFile}.novapart.meta.json`;
 
-  return withFileLock(partFile, async () => {
+  return withFileLock(`init:${partFile}`, async () => {
+    const session = activeSessions.get(partFile);
+    if (session) {
+      if (session.completedSet.size < session.meta.totalChunks) {
+        throw new Error(
+          `MISSING_CHUNKS: "${relPath}" only has ${session.completedSet.size}/${session.meta.totalChunks} chunks completed`
+        );
+      }
+      await session.handle.close().catch(() => {});
+      activeSessions.delete(partFile);
+    } else {
+      try {
+        const rawMeta = await fs.readFile(metaFile, "utf8");
+        const meta = JSON.parse(rawMeta) as ChunkMetaFile;
+        if (meta.completedChunks.length < meta.totalChunks) {
+          throw new Error(
+            `MISSING_CHUNKS: "${relPath}" only has ${meta.completedChunks.length}/${meta.totalChunks} chunks completed`
+          );
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("MISSING_CHUNKS:")) {
+          throw err;
+        }
+      }
+    }
+
     const stat = await fs.stat(partFile);
     if (stat.size !== params.totalSize) {
       throw new Error(
@@ -145,28 +224,10 @@ export async function completeChunkedFile(params: CompleteChunkFileParams): Prom
       );
     }
 
-    try {
-      const rawMeta = await fs.readFile(metaFile, "utf8");
-      const meta = JSON.parse(rawMeta) as ChunkMetaFile;
-      if (meta.completedChunks.length < meta.totalChunks) {
-        throw new Error(
-          `MISSING_CHUNKS: "${relPath}" only has ${meta.completedChunks.length}/${meta.totalChunks} chunks completed`
-        );
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith("MISSING_CHUNKS:")) {
-        throw err;
-      }
-    }
-
-    // Atomic rename .novapart -> targetFile
     await fs.rename(partFile, targetFile);
 
-    // Apply original modification time
     const mtimeDate = new Date(params.sourceMtime);
     await fs.utimes(targetFile, mtimeDate, mtimeDate).catch(() => {});
-
-    // Remove temporary meta file
     await fs.unlink(metaFile).catch(() => {});
 
     return {

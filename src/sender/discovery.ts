@@ -51,6 +51,7 @@ async function queryTailscalePeers(receiverPort: number): Promise<DiscoveredPeer
             OS?: string;
             Online?: boolean;
             TailscaleIPs?: string[];
+            CurAddr?: string;
           }
         >;
       };
@@ -60,8 +61,30 @@ async function queryTailscalePeers(receiverPort: number): Promise<DiscoveredPeer
         const ipv4 = (peer.TailscaleIPs || []).find((ip) => !ip.includes(":"));
         if (!ipv4) continue;
         const rawName = peer.HostName || peer.DNSName?.split(".")[0] || ipv4;
+
+        // If Tailscale reports a Direct LAN address (e.g. 192.168.11.136:41641), surface Direct LAN too!
+        if (peer.CurAddr) {
+          const lanIp = peer.CurAddr.split(":")[0];
+          if (
+            lanIp &&
+            (lanIp.startsWith("192.168.") ||
+              lanIp.startsWith("10.") ||
+              lanIp.startsWith("172."))
+          ) {
+            list.push({
+              name: `${rawName} (Direct LAN)`,
+              ip: lanIp,
+              url: `http://${lanIp}:${receiverPort}`,
+              os: peer.OS || "linux",
+              source: "lan",
+              online: Boolean(peer.Online),
+              novaShareActive: false,
+            });
+          }
+        }
+
         list.push({
-          name: rawName,
+          name: `${rawName} (Tailscale)`,
           ip: ipv4,
           url: `http://${ipv4}:${receiverPort}`,
           os: peer.OS || "linux",

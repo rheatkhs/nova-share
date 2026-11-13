@@ -51,7 +51,7 @@ export async function sendLargeFileChunked(options: SendChunkedFileOptions): Pro
   let sentChunksCount = completedSet.size;
 
   try {
-    const workerCount = Math.max(1, Math.min(options.concurrency || 2, 4, pendingIndices.length || 1));
+    const workerCount = Math.max(1, Math.min(options.concurrency || 4, 16, pendingIndices.length || 1));
     let queueCursor = 0;
 
     const workers = Array.from({ length: workerCount }, async () => {

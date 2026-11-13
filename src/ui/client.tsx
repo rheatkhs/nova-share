@@ -172,7 +172,7 @@ function NovaShareOperatorDeck() {
   const [destinationDir, setDestinationDir] = useState("");
   const [useSmartIgnore, setUseSmartIgnore] = useState(true);
   const [bandwidthLimitMBps, setBandwidthLimitMBps] = useState(0);
-  const [concurrency, setConcurrency] = useState(2);
+  const [concurrency, setConcurrency] = useState(4);
   const [profiles, setProfiles] = useState<BackupProfile[]>([]);
   const [newProfileName, setNewProfileName] = useState("");
   const [newProfileAutoSync, setNewProfileAutoSync] =
@@ -1264,8 +1264,10 @@ function NovaShareOperatorDeck() {
                   onChange={(e) => setConcurrency(Number(e.target.value))}
                 >
                   <option value="1">1 Stream Sekuensial</option>
-                  <option value="2">2 Streams Paralel (Ideal Wi-Fi)</option>
-                  <option value="4">4 Streams Paralel (Tailscale LAN)</option>
+                  <option value="2">2 Streams Paralel</option>
+                  <option value="4">4 Streams Paralel (Rekomendasi)</option>
+                  <option value="8">8 Streams Paralel (Turbo Wi-Fi / LAN)</option>
+                  <option value="12">12 Streams Paralel (Max Throughput)</option>
                 </Select>
               </div>
             </div>
