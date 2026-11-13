@@ -783,6 +783,11 @@ a {
   font-weight: 600;
 }
 
+.ns-explorer__footer .ns-tabular {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .ns-filter-bar {
   display: flex;
   justify-content: space-between;
