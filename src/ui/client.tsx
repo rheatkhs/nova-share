@@ -188,6 +188,30 @@ function NovaShareOperatorDeck() {
     }
   }
 
+  async function handlePickNativeWindowsFolder() {
+    setLocalLoading(true);
+    try {
+      const res = await fetch("/api/local/pick-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initialPath: sourceDir }),
+      });
+      const data = await res.json();
+      if (res.ok && !data.cancelled && data.path) {
+        setSourceDir(data.path);
+        if (data.browse) {
+          setLocalBrowse(data.browse);
+        } else {
+          await browseLocalPath(data.path);
+        }
+      } else if (data.unsupported) {
+        await browseLocalPath(sourceDir);
+      }
+    } finally {
+      setLocalLoading(false);
+    }
+  }
+
   async function browseRemotePath(
     targetPath?: string,
     overrideUrl?: string,
@@ -522,17 +546,23 @@ function NovaShareOperatorDeck() {
                 id="source-dir-input"
                 value={sourceDir}
                 onChange={(e) => setSourceDir(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void browseLocalPath(sourceDir);
+                  }
+                }}
                 placeholder="C:\Users\...\Project"
                 className="ns-mono"
               />
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => browseLocalPath(sourceDir)}
+                onClick={handlePickNativeWindowsFolder}
                 disabled={localLoading}
+                title="Buka dialog Windows Explorer untuk memilih folder"
               >
                 <FolderOpen className="ns-icon-sm" />
-                <span>Buka</span>
+                <span>Pilih Folder...</span>
               </Button>
             </div>
 
@@ -554,6 +584,11 @@ function NovaShareOperatorDeck() {
                   <Input
                     value={localNewFolder}
                     onChange={(e) => setLocalNewFolder(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        void handleCreateFolder("local");
+                      }
+                    }}
                     placeholder="Folder baru..."
                     aria-label="Buat folder baru di Windows"
                     className="ns-input--compact"
@@ -563,17 +598,35 @@ function NovaShareOperatorDeck() {
                     size="sm"
                     onClick={() => handleCreateFolder("local")}
                     disabled={!localNewFolder.trim()}
+                    title="Buat folder baru di lokasi ini"
                   >
                     <FolderPlus className="ns-icon-xs" />
                   </Button>
                 </div>
               </div>
 
+              {localBrowse?.roots && localBrowse.roots.length > 0 && (
+                <div className="ns-explorer__roots" aria-label="Pintasan drive dan folder Windows">
+                  {localBrowse.roots.map((r) => (
+                    <button
+                      key={r.path}
+                      type="button"
+                      className={`ns-root-pill ${
+                        localBrowse.currentPath === r.path ? "ns-root-pill--active" : ""
+                      }`}
+                      onClick={() => browseLocalPath(r.path)}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="ns-explorer__list" role="region" aria-label="Daftar folder Windows">
                 {localDirs.length === 0 ? (
                   <div className="ns-explorer__empty">
-                    Tidak ada sub-folder di dalam direktori ini (
-                    {localBrowse?.entries?.length || 0} file siap dibackup).
+                    Folder ini tidak memiliki sub-folder (
+                    {localBrowse?.entries?.length || 0} file di dalamnya siap dibackup).
                   </div>
                 ) : (
                   localDirs.map((dir: DirectoryEntry) => (
@@ -587,10 +640,23 @@ function NovaShareOperatorDeck() {
                         <Folder className="ns-icon-xs ns-text-muted" />
                         <span>{dir.name}</span>
                       </span>
-                      <ChevronRight className="ns-icon-xs ns-text-muted" />
+                      <span className="ns-explorer__item-action">
+                        <span>Buka</span>
+                        <ChevronRight className="ns-icon-xs" />
+                      </span>
                     </button>
                   ))
                 )}
+              </div>
+
+              <div className="ns-explorer__footer">
+                <span className="ns-explorer__footer-path ns-mono" title={sourceDir}>
+                  Aktif: {localBrowse?.currentPath || sourceDir}
+                </span>
+                <span className="ns-tabular">
+                  {localDirs.length} folder •{" "}
+                  {Math.max(0, (localBrowse?.entries?.length || 0) - localDirs.length)} file
+                </span>
               </div>
             </div>
 
@@ -928,17 +994,36 @@ function NovaShareOperatorDeck() {
                 id="dest-dir-input"
                 value={destinationDir}
                 onChange={(e) => setDestinationDir(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    void browseRemotePath(destinationDir);
+                  }
+                }}
                 placeholder="/home/user/NovaShare-Backups"
                 className="ns-mono"
               />
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => browseRemotePath(destinationDir)}
+                onClick={async () => {
+                  if (destinationDir.trim()) {
+                    await fetch("/api/remote/mkdir", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        receiverUrl: receiverUrl.trim(),
+                        token: token.trim(),
+                        path: destinationDir.trim(),
+                      }),
+                    }).catch(() => {});
+                  }
+                  await browseRemotePath(destinationDir);
+                }}
                 disabled={remoteLoading}
+                title="Buka atau buat path tujuan di Linux Omarchy"
               >
                 <FolderOpen className="ns-icon-sm" />
-                <span>Buka</span>
+                <span>Pilih / Buka</span>
               </Button>
             </div>
 
@@ -960,6 +1045,11 @@ function NovaShareOperatorDeck() {
                   <Input
                     value={remoteNewFolder}
                     onChange={(e) => setRemoteNewFolder(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        void handleCreateFolder("remote");
+                      }
+                    }}
                     placeholder="Folder baru di Linux..."
                     aria-label="Buat folder baru di Linux Omarchy"
                     className="ns-input--compact"
@@ -969,11 +1059,29 @@ function NovaShareOperatorDeck() {
                     size="sm"
                     onClick={() => handleCreateFolder("remote")}
                     disabled={!remoteNewFolder.trim()}
+                    title="Buat folder baru di Linux"
                   >
                     <FolderPlus className="ns-icon-xs" />
                   </Button>
                 </div>
               </div>
+
+              {remoteBrowse?.roots && remoteBrowse.roots.length > 0 && (
+                <div className="ns-explorer__roots" aria-label="Pintasan direktori Linux">
+                  {remoteBrowse.roots.map((r) => (
+                    <button
+                      key={r.path}
+                      type="button"
+                      className={`ns-root-pill ${
+                        remoteBrowse.currentPath === r.path ? "ns-root-pill--active" : ""
+                      }`}
+                      onClick={() => browseRemotePath(r.path)}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <div
                 className="ns-explorer__list"
@@ -1000,10 +1108,22 @@ function NovaShareOperatorDeck() {
                         <Folder className="ns-icon-xs ns-text-muted" />
                         <span>{dir.name}</span>
                       </span>
-                      <ChevronRight className="ns-icon-xs ns-text-muted" />
+                      <span className="ns-explorer__item-action">
+                        <span>Buka</span>
+                        <ChevronRight className="ns-icon-xs" />
+                      </span>
                     </button>
                   ))
                 )}
+              </div>
+
+              <div className="ns-explorer__footer">
+                <span className="ns-explorer__footer-path ns-mono" title={destinationDir}>
+                  Aktif: {remoteBrowse?.currentPath || destinationDir}
+                </span>
+                <span className="ns-tabular">
+                  {remoteDirs.length} folder
+                </span>
               </div>
             </div>
 

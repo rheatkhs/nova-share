@@ -81,6 +81,7 @@ export interface BrowseResponse {
   freeBytes: number;
   totalBytes: number;
   entries: DirectoryEntry[];
+  roots?: Array<{ label: string; path: string }>;
 }
 
 export interface ReceiverSystemInfo {

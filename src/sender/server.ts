@@ -106,6 +106,40 @@ export function startSenderServer(options: SenderServerOptions = {}): {
           return jsonResponse(res);
         }
 
+        if (url.pathname === "/api/local/pick-folder" && req.method === "POST") {
+          const body = (await req.json().catch(() => ({}))) as { initialPath?: string };
+          if (process.platform === "win32") {
+            const initDir = (body.initialPath || "").replace(/'/g, "''");
+            const psScript = `
+              Add-Type -AssemblyName System.Windows.Forms
+              $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized' }
+              $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+              $dlg.Description = 'Pilih Folder untuk NovaShare Backup'
+              $dlg.ShowNewFolderButton = $true
+              if ('${initDir}' -ne '' -and (Test-Path -LiteralPath '${initDir}')) {
+                $dlg.SelectedPath = '${initDir}'
+              }
+              $res = $dlg.ShowDialog($owner)
+              $owner.Dispose()
+              if ($res -eq [System.Windows.Forms.DialogResult]::OK) {
+                [Console]::Out.Write($dlg.SelectedPath)
+              }
+            `;
+            const proc = Bun.spawn(
+              ["powershell", "-NoProfile", "-STA", "-Command", psScript],
+              { stdout: "pipe", stderr: "ignore" }
+            );
+            const selected = (await new Response(proc.stdout).text()).trim();
+            await proc.exited;
+            if (selected) {
+              const browsed = await browseDirectory(selected);
+              return jsonResponse({ cancelled: false, path: browsed.currentPath, browse: browsed });
+            }
+            return jsonResponse({ cancelled: true });
+          }
+          return jsonResponse({ cancelled: true, unsupported: true });
+        }
+
         // Proxy to Remote Linux Omarchy Receiver (System Info, Browse, Mkdir)
         if (url.pathname === "/api/remote/info" && req.method === "POST") {
           const { receiverUrl, token } = (await req.json()) as {
