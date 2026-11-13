@@ -48,54 +48,67 @@ export async function sendSmallFileBatches(options: SendBatchGroupsOptions): Pro
 
   const endpoint = `${receiverUrl.replace(/\/+$/, "")}/api/transfer/batch`;
 
-  for (const batch of batches) {
-    await options.waitIfPausedOrOffline();
+  let cursor = 0;
+  const workerCount = Math.min(3, batches.length);
 
-    const batchInputs: BatchInputFile[] = [];
-    let batchRawBytes = 0;
-
-    for (const item of batch) {
-      const fullPath = path.resolve(sourceDir, item.relativePath);
-      const data = new Uint8Array(await fs.readFile(fullPath));
-      batchInputs.push({
-        relativePath: item.relativePath,
-        mtime: item.mtime,
-        data,
-      });
-      batchRawBytes += data.byteLength;
-    }
-
-    const { binaryFrame } = encodeBatchPacket(destinationDir, batchInputs);
-    const label =
-      batch.length === 1
-        ? batch[0]!.relativePath
-        : `${batch[0]!.relativePath} (+${batch.length - 1} small files)`;
-
-    // Retry loop for Wi-Fi / Tailscale resilience
+  const workers = Array.from({ length: workerCount }, async () => {
     while (true) {
+      const idx = cursor++;
+      if (idx >= batches.length) break;
+      const batch = batches[idx]!;
+
       await options.waitIfPausedOrOffline();
-      try {
-        await options.throttleBytes(binaryFrame.byteLength);
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Nova-Token": token,
-          },
-          body: binaryFrame,
-        });
 
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`Batch HTTP ${res.status}: ${errText}`);
+      const batchInputs: BatchInputFile[] = await Promise.all(
+        batch.map(async (item) => {
+          const fullPath = path.resolve(sourceDir, item.relativePath);
+          const data = new Uint8Array(await fs.readFile(fullPath));
+          return {
+            relativePath: item.relativePath,
+            mtime: item.mtime,
+            data,
+          };
+        })
+      );
+
+      let batchRawBytes = 0;
+      for (const b of batchInputs) {
+        batchRawBytes += b.data.byteLength;
+      }
+
+      const { binaryFrame } = encodeBatchPacket(destinationDir, batchInputs);
+      const label =
+        batch.length === 1
+          ? batch[0]!.relativePath
+          : `${batch[0]!.relativePath} (+${batch.length - 1} small files)`;
+
+      while (true) {
+        await options.waitIfPausedOrOffline();
+        try {
+          await options.throttleBytes(binaryFrame.byteLength);
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "X-Nova-Token": token,
+            },
+            body: binaryFrame,
+          });
+
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Batch HTTP ${res.status}: ${errText}`);
+          }
+
+          options.onBatchProgress(batch.length, batchRawBytes, label);
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await options.onNetworkDrop(msg);
         }
-
-        options.onBatchProgress(batch.length, batchRawBytes, label);
-        break;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await options.onNetworkDrop(msg);
       }
     }
-  }
+  });
+
+  await Promise.all(workers);
 }

@@ -71,7 +71,17 @@ export class TransferManager {
   private bandwidthLimitMBps = 0;
   private activeStartedAt = 0;
   private activeSessionBytes = 0;
+  private recentByteEvents: Array<{ t: number; bytes: number }> = [];
 
+  private recordTransferredBytes(bytes: number): void {
+    const now = Date.now();
+    this.activeSessionBytes += bytes;
+    this.recentByteEvents.push({ t: now, bytes });
+    const cutoff = now - 8000;
+    while (this.recentByteEvents.length > 0 && this.recentByteEvents[0]!.t < cutoff) {
+      this.recentByteEvents.shift();
+    }
+  }
   public getProgress(): TransferProgress {
     return {
       ...this.progress,
@@ -134,11 +144,23 @@ export class TransferManager {
 
   private emit(): void {
     this.progress.updatedAt = Date.now();
-    const elapsedSec = Math.max(0.2, (Date.now() - this.activeStartedAt) / 1000);
+    const now = Date.now();
+    const cutoff = now - 8000;
+    while (this.recentByteEvents.length > 0 && this.recentByteEvents[0]!.t < cutoff) {
+      this.recentByteEvents.shift();
+    }
     if (this.progress.state === "TRANSFERRING" && this.activeSessionBytes > 0) {
-      this.progress.speedBytesPerSec = Math.round(this.activeSessionBytes / elapsedSec);
+      const windowBytes = this.recentByteEvents.reduce((acc, e) => acc + e.bytes, 0);
+      const oldestEvent = this.recentByteEvents[0];
+      const windowSec = oldestEvent
+        ? Math.max(0.5, (now - oldestEvent.t) / 1000)
+        : Math.max(0.5, (now - this.activeStartedAt) / 1000);
+      this.progress.speedBytesPerSec = Math.round(
+        windowBytes > 0
+          ? windowBytes / windowSec
+          : this.activeSessionBytes / Math.max(0.5, (now - this.activeStartedAt) / 1000)
+      );
       const remainingBytes = Math.max(
-        0,
         this.progress.totalBytes - this.progress.bytesTransferred - this.progress.bytesSkipped
       );
       this.progress.etaSeconds =
@@ -237,7 +259,7 @@ export class TransferManager {
     this.bandwidthLimitMBps = params.bandwidthLimitMBps ?? 0;
     this.activeStartedAt = Date.now();
     this.activeSessionBytes = 0;
-
+    this.recentByteEvents = [];
     const jobId = `job-${Date.now()}`;
     const chunkSize = params.chunkSize || DEFAULT_CHUNK_SIZE;
     const smallThreshold = Math.min(SMALL_FILE_THRESHOLD, chunkSize);
@@ -380,7 +402,7 @@ export class TransferManager {
             this.progress.filesCompleted += filesDone;
             this.progress.filesRemaining = Math.max(0, this.progress.filesRemaining - filesDone);
             this.progress.bytesTransferred += bytesDone;
-            this.activeSessionBytes += bytesDone;
+            this.recordTransferredBytes(bytesDone);
             this.progress.currentFile = label;
             this.emit();
           },
@@ -413,7 +435,7 @@ export class TransferManager {
             throttleBytes: (b) => this.throttleBytes(b),
             onChunkSent: (bytesSent, doneChunks, totChunks, relPath) => {
               this.progress.bytesTransferred += bytesSent;
-              this.activeSessionBytes += bytesSent;
+              this.recordTransferredBytes(bytesSent);
               this.progress.currentFile = relPath;
               this.progress.currentChunkInfo = `Chunk ${doneChunks} / ${totChunks}`;
               this.emit();
