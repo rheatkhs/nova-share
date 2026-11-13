@@ -8,6 +8,9 @@ import {
   CheckCircle2,
   ChevronRight,
   CornerLeftUp,
+  CheckSquare,
+  FileText,
+  FileUp,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -116,6 +119,7 @@ function NovaShareOperatorDeck() {
   // Remote Linux Connection Status
   const [connStatus, setConnStatus] = useState<"idle" | "checking" | "online" | "offline">("idle");
   const [remoteInfo, setRemoteInfo] = useState<ReceiverSystemInfo | null>(null);
+  const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [connError, setConnError] = useState<string | null>(null);
 
   // Inline Directory Explorers (No Modals!)
@@ -182,7 +186,7 @@ function NovaShareOperatorDeck() {
     return () => es.close();
   }, []);
 
-  async function browseLocalPath(targetPath?: string) {
+  async function browseLocalPath(targetPath?: string, keepSelection = false) {
     setLocalLoading(true);
     try {
       const q = targetPath ? `?path=${encodeURIComponent(targetPath)}` : "";
@@ -191,6 +195,9 @@ function NovaShareOperatorDeck() {
       if (res.ok) {
         setLocalBrowse(data);
         setSourceDir(data.currentPath);
+        if (!keepSelection) {
+          setSelectedItems([]);
+        }
       }
     } finally {
       setLocalLoading(false);
@@ -208,6 +215,7 @@ function NovaShareOperatorDeck() {
       const data = await res.json();
       if (res.ok && !data.cancelled && data.path) {
         setSourceDir(data.path);
+        setSelectedItems([]);
         if (data.browse) {
           setLocalBrowse(data.browse);
         } else {
@@ -219,6 +227,35 @@ function NovaShareOperatorDeck() {
     } finally {
       setLocalLoading(false);
     }
+  }
+
+  async function handlePickNativeWindowsFile() {
+    setLocalLoading(true);
+    try {
+      const res = await fetch("/api/local/pick-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initialPath: sourceDir }),
+      });
+      const data = await res.json();
+      if (res.ok && !data.cancelled && data.parentDir && Array.isArray(data.files)) {
+        setSourceDir(data.parentDir);
+        setSelectedItems(data.files);
+        if (data.browse) {
+          setLocalBrowse(data.browse);
+        } else {
+          await browseLocalPath(data.parentDir, true);
+        }
+      }
+    } finally {
+      setLocalLoading(false);
+    }
+  }
+
+  function toggleSelectItem(name: string) {
+    setSelectedItems((prev) =>
+      prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]
+    );
   }
 
   async function browseRemotePath(
@@ -320,6 +357,7 @@ function NovaShareOperatorDeck() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sourceDir: sourceDir.trim(),
+        selectedItems: selectedItems.length > 0 ? selectedItems : undefined,
         destinationDir: destinationDir.trim(),
         receiverUrl: receiverUrl.trim(),
         token: token.trim(),
@@ -428,9 +466,13 @@ function NovaShareOperatorDeck() {
     isJobRunning,
   ]);
 
-  const localDirs = (localBrowse?.entries || []).filter((e: DirectoryEntry) => e.isDirectory);
-  const remoteDirs = (remoteBrowse?.entries || []).filter((e: DirectoryEntry) => e.isDirectory);
+  const localEntries = localBrowse?.entries || [];
+  const localDirs = localEntries.filter((e: DirectoryEntry) => e.isDirectory);
+  const localFiles = localEntries.filter((e: DirectoryEntry) => !e.isDirectory);
 
+  const remoteEntries = remoteBrowse?.entries || [];
+  const remoteDirs = remoteEntries.filter((e: DirectoryEntry) => e.isDirectory);
+  const remoteFiles = remoteEntries.filter((e: DirectoryEntry) => !e.isDirectory);
   const remoteUsedRatio =
     remoteBrowse && remoteBrowse.totalBytes > 0
       ? Math.round(
@@ -573,10 +615,20 @@ function NovaShareOperatorDeck() {
                 size="sm"
                 onClick={handlePickNativeWindowsFolder}
                 disabled={localLoading}
-                title="Buka dialog Windows Explorer untuk memilih folder"
+                title="Pilih folder dari Windows Explorer"
               >
                 <FolderOpen className="ns-icon-sm" />
-                <span>Pilih Folder...</span>
+                <span>Pilih Folder</span>
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePickNativeWindowsFile}
+                disabled={localLoading}
+                title="Pilih 1 atau beberapa file spesifik dari Windows Explorer"
+              >
+                <FileUp className="ns-icon-sm" />
+                <span>Pilih File</span>
               </Button>
             </div>
 
@@ -636,40 +688,96 @@ function NovaShareOperatorDeck() {
                 </div>
               )}
 
-              <div className="ns-explorer__list" role="region" aria-label="Daftar folder Windows">
-                {localDirs.length === 0 ? (
+              <div className="ns-explorer__list" role="region" aria-label="Daftar folder dan file SENDER">
+                {localEntries.length === 0 ? (
                   <div className="ns-explorer__empty">
-                    Folder ini tidak memiliki sub-folder (
-                    {localBrowse?.entries?.length || 0} file di dalamnya siap dibackup).
+                    Direktori ini kosong (0 folder, 0 file).
                   </div>
                 ) : (
-                  localDirs.map((dir: DirectoryEntry) => (
-                    <button
-                      key={dir.path}
-                      type="button"
-                      className="ns-explorer__item"
-                      onClick={() => browseLocalPath(dir.path)}
-                    >
-                      <span className="ns-explorer__item-name">
-                        <Folder className="ns-icon-xs ns-text-muted" />
-                        <span>{dir.name}</span>
-                      </span>
-                      <span className="ns-explorer__item-action">
-                        <span>Buka</span>
-                        <ChevronRight className="ns-icon-xs" />
-                      </span>
-                    </button>
-                  ))
+                  localEntries.map((entry: DirectoryEntry) => {
+                    const isSelected = selectedItems.includes(entry.name);
+                    return (
+                      <div
+                        key={entry.path}
+                        className={`ns-explorer__item ${
+                          isSelected ? "ns-explorer__item--selected" : ""
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className={`ns-explorer__check ${
+                            isSelected ? "ns-explorer__check--active" : ""
+                          }`}
+                          onClick={() => toggleSelectItem(entry.name)}
+                          aria-label={`Pilih ${entry.name}`}
+                          title={
+                            isSelected
+                              ? "Batalkan pilihan item ini"
+                              : "Pilih item ini untuk dikirim"
+                          }
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="ns-icon-xs" />
+                          ) : (
+                            <Square className="ns-icon-xs" />
+                          )}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="ns-explorer__main-btn"
+                          onClick={() =>
+                            entry.isDirectory
+                              ? browseLocalPath(entry.path)
+                              : toggleSelectItem(entry.name)
+                          }
+                        >
+                          <span className="ns-explorer__item-name">
+                            {entry.isDirectory ? (
+                              <Folder className="ns-icon-xs ns-text-accent" />
+                            ) : (
+                              <FileText className="ns-icon-xs ns-text-muted" />
+                            )}
+                            <span>{entry.name}</span>
+                          </span>
+                          <span className="ns-explorer__item-action ns-tabular">
+                            {entry.isDirectory ? (
+                              <>
+                                <span>Buka</span>
+                                <ChevronRight className="ns-icon-xs" />
+                              </>
+                            ) : (
+                              <span>{formatBytes(entry.size)}</span>
+                            )}
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
+
+              {selectedItems.length > 0 && (
+                <div className="ns-selection-bar">
+                  <span>
+                    Mode Seleksi: {selectedItems.length} file/folder dipilih untuk dikirim
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedItems([])}
+                  >
+                    Reset (Kirim Semua)
+                  </Button>
+                </div>
+              )}
 
               <div className="ns-explorer__footer">
                 <span className="ns-explorer__footer-path ns-mono" title={sourceDir}>
                   Aktif: {localBrowse?.currentPath || sourceDir}
                 </span>
                 <span className="ns-tabular">
-                  {localDirs.length} folder •{" "}
-                  {Math.max(0, (localBrowse?.entries?.length || 0) - localDirs.length)} file
+                  {localDirs.length} folder • {localFiles.length} file
                 </span>
               </div>
             </div>
@@ -839,7 +947,15 @@ function NovaShareOperatorDeck() {
                 disabled={isJobRunning || progress.state === "PAUSED"}
               >
                 <Play className="ns-icon-sm" />
-                <span>Mulai Backup ke {connStatus === "online" ? receiverHost : "RECEIVER"}</span>
+                <span>
+                  {selectedItems.length > 0
+                    ? `Kirim ${selectedItems.length} Item Terpilih ke ${
+                        connStatus === "online" ? receiverHost : "RECEIVER"
+                      }`
+                    : `Mulai Backup Folder ke ${
+                        connStatus === "online" ? receiverHost : "RECEIVER"
+                      }`}
+                </span>
               </Button>
 
               <Button
@@ -1102,33 +1218,46 @@ function NovaShareOperatorDeck() {
               <div
                 className="ns-explorer__list"
                 role="region"
-                aria-label="Daftar folder Linux Omarchy"
+                aria-label="Daftar folder dan file RECEIVER"
               >
-                {remoteDirs.length === 0 ? (
+                {remoteEntries.length === 0 ? (
                   <div className="ns-explorer__empty">
                     {connStatus === "online"
-                      ? `Folder tujuan siap menerima struktur 1:1 (${
-                          remoteBrowse?.entries?.length || 0
-                        } item di dalam folder ini).`
-                      : "Hubungkan ke Receiver Linux untuk menelusuri direktori jarak jauh."}
+                      ? "Folder tujuan masih kosong dan siap menerima struktur 1:1."
+                      : "Hubungkan ke RECEIVER untuk menelusuri direktori jarak jauh."}
                   </div>
                 ) : (
-                  remoteDirs.map((dir: DirectoryEntry) => (
-                    <button
-                      key={dir.path}
-                      type="button"
-                      className="ns-explorer__item"
-                      onClick={() => browseRemotePath(dir.path)}
-                    >
-                      <span className="ns-explorer__item-name">
-                        <Folder className="ns-icon-xs ns-text-muted" />
-                        <span>{dir.name}</span>
-                      </span>
-                      <span className="ns-explorer__item-action">
-                        <span>Buka</span>
-                        <ChevronRight className="ns-icon-xs" />
-                      </span>
-                    </button>
+                  remoteEntries.map((entry: DirectoryEntry) => (
+                    <div key={entry.path} className="ns-explorer__item">
+                      <button
+                        type="button"
+                        className="ns-explorer__main-btn"
+                        onClick={() => {
+                          if (entry.isDirectory) {
+                            void browseRemotePath(entry.path);
+                          }
+                        }}
+                      >
+                        <span className="ns-explorer__item-name">
+                          {entry.isDirectory ? (
+                            <Folder className="ns-icon-xs ns-text-success" />
+                          ) : (
+                            <FileText className="ns-icon-xs ns-text-muted" />
+                          )}
+                          <span>{entry.name}</span>
+                        </span>
+                        <span className="ns-explorer__item-action ns-tabular">
+                          {entry.isDirectory ? (
+                            <>
+                              <span>Buka</span>
+                              <ChevronRight className="ns-icon-xs" />
+                            </>
+                          ) : (
+                            <span>{formatBytes(entry.size)}</span>
+                          )}
+                        </span>
+                      </button>
+                    </div>
                   ))
                 )}
               </div>
@@ -1138,7 +1267,7 @@ function NovaShareOperatorDeck() {
                   Aktif: {remoteBrowse?.currentPath || destinationDir}
                 </span>
                 <span className="ns-tabular">
-                  {remoteDirs.length} folder
+                  {remoteDirs.length} folder • {remoteFiles.length} file
                 </span>
               </div>
             </div>

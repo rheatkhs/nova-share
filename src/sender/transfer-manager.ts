@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
   DEFAULT_CHUNK_SIZE,
   SMALL_FILE_THRESHOLD,
@@ -13,6 +15,7 @@ import { scanSourceDirectory } from "./scanner.ts";
 
 export interface StartTransferJobParams {
   sourceDir: string;
+  selectedItems?: string[];
   destinationDir: string;
   receiverUrl: string;
   token: string;
@@ -263,9 +266,17 @@ export class TransferManager {
     this.emit();
 
     try {
-      // 1. Scan source directory
+      // Determine if sourceDir is a single file or a directory
+      const resolvedSource = path.resolve(params.sourceDir);
+      const sourceStat = await fs.stat(resolvedSource);
+      const effectiveSourceDir = sourceStat.isFile()
+        ? path.dirname(resolvedSource)
+        : resolvedSource;
+
+      // 1. Scan source directory or selected files
       const scannedFiles = await scanSourceDirectory({
-        sourceDir: params.sourceDir,
+        sourceDir: resolvedSource,
+        selectedItems: params.selectedItems,
         useSmartIgnore: params.useSmartIgnore,
         customIgnore: params.customIgnore,
         shouldAbort: () => this.cancelRequested,
@@ -276,7 +287,6 @@ export class TransferManager {
           }
         },
       });
-
       const totalSourceBytes = scannedFiles.reduce((acc, f) => acc + f.size, 0);
       this.progress.totalFiles = scannedFiles.length;
       this.progress.totalBytes = totalSourceBytes;
@@ -341,7 +351,7 @@ export class TransferManager {
         this.emit();
 
         await sendSmallFileBatches({
-          sourceDir: params.sourceDir,
+          sourceDir: effectiveSourceDir,
           destinationDir: params.destinationDir,
           receiverUrl: params.receiverUrl,
           token: params.token,
@@ -375,7 +385,7 @@ export class TransferManager {
           this.emit();
 
           await sendLargeFileChunked({
-            sourceDir: params.sourceDir,
+            sourceDir: effectiveSourceDir,
             destinationDir: params.destinationDir,
             receiverUrl: params.receiverUrl,
             token: params.token,

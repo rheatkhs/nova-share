@@ -140,6 +140,55 @@ export function startSenderServer(options: SenderServerOptions = {}): {
           return jsonResponse({ cancelled: true, unsupported: true });
         }
 
+        if (url.pathname === "/api/local/pick-file" && req.method === "POST") {
+          const body = (await req.json().catch(() => ({}))) as { initialPath?: string };
+          if (process.platform === "win32") {
+            const initDir = (body.initialPath || "").replace(/'/g, "''");
+            const psScript = `
+              Add-Type -AssemblyName System.Windows.Forms
+              $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false; WindowState = 'Minimized' }
+              $dlg = New-Object System.Windows.Forms.OpenFileDialog
+              $dlg.Title = 'Pilih File untuk Dikirim via NovaShare'
+              $dlg.Multiselect = $true
+              if ('${initDir}' -ne '' -and (Test-Path -LiteralPath '${initDir}')) {
+                $dlg.InitialDirectory = '${initDir}'
+              }
+              $res = $dlg.ShowDialog($owner)
+              $owner.Dispose()
+              if ($res -eq [System.Windows.Forms.DialogResult]::OK) {
+                [Console]::Out.Write(($dlg.FileNames -join '|'))
+              }
+            `;
+            const proc = Bun.spawn(
+              ["powershell", "-NoProfile", "-STA", "-Command", psScript],
+              { stdout: "pipe", stderr: "ignore" }
+            );
+            const raw = (await new Response(proc.stdout).text()).trim();
+            await proc.exited;
+            if (raw) {
+              const fullPaths = raw.split("|").map((s) => s.trim()).filter(Boolean);
+              if (fullPaths.length > 0) {
+                const firstFile = fullPaths[0]!;
+                const lastSlash = Math.max(firstFile.lastIndexOf("\\"), firstFile.lastIndexOf("/"));
+                const parentDir = lastSlash > 0 ? firstFile.slice(0, lastSlash) : firstFile;
+                const fileNames = fullPaths.map((p) => {
+                  const idx = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+                  return idx >= 0 ? p.slice(idx + 1) : p;
+                });
+                const browsed = await browseDirectory(parentDir);
+                return jsonResponse({
+                  cancelled: false,
+                  parentDir: browsed.currentPath,
+                  files: fileNames,
+                  browse: browsed,
+                });
+              }
+            }
+            return jsonResponse({ cancelled: true });
+          }
+          return jsonResponse({ cancelled: true, unsupported: true });
+        }
+
         // Proxy to Remote Linux Omarchy Receiver (System Info, Browse, Mkdir)
         if (url.pathname === "/api/remote/info" && req.method === "POST") {
           const { receiverUrl, token } = (await req.json()) as {

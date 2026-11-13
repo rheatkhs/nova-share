@@ -98,4 +98,32 @@ describe("Phase 2: Windows Sender Engine (Dual-Lane Pipeline & Delta Sync)", () 
     expect(secondRun.filesCompleted).toBe(0);
     expect(secondRun.bytesTransferred).toBe(0);
   });
+
+  test("transfers only explicitly selected files when selectedItems is provided", async () => {
+    const selectiveDest = path.join(tempRoot, "selective-dest");
+    const manager = new TransferManager();
+    const result = await manager.runBackupJob({
+      sourceDir: path.join(sourceDir, "docs"),
+      selectedItems: ["note-1.txt", "note-2.txt"],
+      destinationDir: selectiveDest,
+      receiverUrl,
+      token,
+      useSmartIgnore: true,
+    });
+
+    expect(result.state).toBe("COMPLETED");
+    expect(result.totalFiles).toBe(2);
+    expect(result.filesCompleted).toBe(2);
+
+    const f1Exists = await fs
+      .stat(path.join(selectiveDest, "note-1.txt"))
+      .then(() => true)
+      .catch(() => false);
+    const f3Exists = await fs
+      .stat(path.join(selectiveDest, "note-3.txt"))
+      .then(() => true)
+      .catch(() => false);
+    expect(f1Exists).toBe(true);
+    expect(f3Exists).toBe(false);
+  });
 });
