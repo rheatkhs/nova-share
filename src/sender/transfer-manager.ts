@@ -5,6 +5,7 @@ import {
   SMALL_FILE_THRESHOLD,
 } from "../shared/constants.ts";
 import type {
+  DryRunPreviewResponse,
   SyncPlanItem,
   SyncPlanResponse,
   TransferProgress,
@@ -434,5 +435,61 @@ export class TransferManager {
       this.emit();
       return this.getProgress();
     }
+  }
+
+  /**
+   * Performs a pre-flight Dry-Run scan & delta check against the Receiver
+   * without transferring any bytes.
+   */
+  public async previewBackupPlan(
+    params: StartTransferJobParams
+  ): Promise<DryRunPreviewResponse> {
+    const chunkSize = params.chunkSize || DEFAULT_CHUNK_SIZE;
+    const resolvedSource = path.resolve(params.sourceDir);
+    const scannedFiles = await scanSourceDirectory({
+      sourceDir: resolvedSource,
+      selectedItems: params.selectedItems,
+      useSmartIgnore: params.useSmartIgnore,
+      customIgnore: params.customIgnore,
+    });
+
+    const planUrl = `${params.receiverUrl.replace(/\/+$/, "")}/api/sync/plan`;
+    const planRes = await fetch(planUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Nova-Token": params.token,
+      },
+      body: JSON.stringify({
+        destinationDir: params.destinationDir,
+        files: scannedFiles,
+        chunkSize,
+      }),
+    });
+
+    if (!planRes.ok) {
+      const errBody = await planRes.text();
+      throw new Error(`Dry-Run gagal (${planRes.status}): ${errBody}`);
+    }
+
+    const syncPlan = (await planRes.json()) as SyncPlanResponse;
+    const enoughSpace =
+      syncPlan.freeBytes === 0 || syncPlan.freeBytes > syncPlan.summary.bytesToTransfer;
+
+    this.log(
+      `[DRY-RUN] ${syncPlan.summary.newCount} baru, ${syncPlan.summary.resumeCount} resume (${(
+        syncPlan.summary.bytesToTransfer /
+        (1024 * 1024)
+      ).toFixed(2)} MB akan dikirim) • ${syncPlan.summary.skipCount} file sudah identik.`
+    );
+    this.emit();
+
+    return {
+      destinationDir: syncPlan.destinationDir,
+      freeBytes: syncPlan.freeBytes,
+      totalBytes: syncPlan.totalBytes,
+      enoughSpace,
+      summary: syncPlan.summary,
+    };
   }
 }

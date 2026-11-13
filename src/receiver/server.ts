@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   APP_VERSION,
@@ -98,6 +99,28 @@ export function startReceiverServer(options: ReceiverServerOptions = {}): Receiv
           return jsonResponse(result);
         }
 
+
+        // 3b. GET /api/fs/download?path=... (Download file from Receiver)
+        if (url.pathname === "/api/fs/download" && req.method === "GET") {
+          const rawPath = url.searchParams.get("path") || "";
+          if (!rawPath.trim()) {
+            return jsonResponse({ error: "BAD_REQUEST", message: "Missing path parameter" }, 400);
+          }
+          const resolved = path.resolve(rawPath.trim());
+          const stat = await fs.stat(resolved);
+          if (!stat.isFile()) {
+            return jsonResponse({ error: "BAD_REQUEST", message: "Path is not a file" }, 400);
+          }
+          const fileName = path.basename(resolved);
+          return new Response(Bun.file(resolved), {
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": String(stat.size),
+              "Content-Disposition": `attachment; filename="${encodeURIComponent(fileName)}"`,
+              ...CORS_HEADERS,
+            },
+          });
+        }
         // 4. POST /api/sync/plan
         if (url.pathname === "/api/sync/plan" && req.method === "POST") {
           const body = (await req.json()) as SyncPlanRequest;

@@ -106,6 +106,7 @@ export interface BackupProfile {
   bandwidthLimitMBps: number; // 0 = unlimited
   concurrency: number;
   lastRunAt?: number;
+  autoSyncMode?: "off" | "on_connect" | "interval_60" | "interval_240";
 }
 
 export type TransferState =
@@ -141,4 +142,22 @@ export interface TransferProgress {
   currentChunkInfo: string | null;
   errorMessage: string | null;
   recentLogs: string[];
+}
+
+export interface DiscoveredPeer {
+  name: string;
+  ip: string;
+  url: string;
+  os: string;
+  source: "tailscale" | "lan" | "local";
+  online: boolean;
+  novaShareActive: boolean;
+}
+
+export interface DryRunPreviewResponse {
+  destinationDir: string;
+  freeBytes: number;
+  totalBytes: number;
+  enoughSpace: boolean;
+  summary: SyncPlanResponse["summary"];
 }

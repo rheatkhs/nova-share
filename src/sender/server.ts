@@ -12,6 +12,8 @@ import {
   type StartTransferJobParams,
 } from "./transfer-manager.ts";
 import { loadUiAssets } from "../ui/assets.ts";
+import { discoverPeers } from "./discovery.ts";
+import { startProfileScheduler } from "./scheduler.ts";
 
 export interface SenderServerOptions {
   port?: number;
@@ -44,6 +46,7 @@ export function startSenderServer(options: SenderServerOptions = {}): {
   const port = options.port ?? Number(process.env.NOVA_SENDER_PORT || DEFAULT_SENDER_PORT);
   const hostname = options.hostname ?? "127.0.0.1";
   const transferManager = new TransferManager();
+  startProfileScheduler(transferManager);
 
   const server = Bun.serve({
     port,
@@ -228,6 +231,41 @@ export function startSenderServer(options: SenderServerOptions = {}): {
           });
           const data = await r.json();
           return jsonResponse(data, r.status);
+        }
+
+        if (url.pathname === "/api/remote/download" && req.method === "GET") {
+          const receiverUrl = url.searchParams.get("receiverUrl") || "";
+          const token = url.searchParams.get("token") || "";
+          const remotePath = url.searchParams.get("path") || "";
+          const target = `${receiverUrl.replace(/\/+$/, "")}/api/fs/download?path=${encodeURIComponent(remotePath)}`;
+          const r = await fetch(target, { headers: { "X-Nova-Token": token } });
+          if (!r.ok) {
+            const errText = await r.text();
+            return jsonResponse({ error: "DOWNLOAD_FAILED", message: errText }, r.status);
+          }
+          const disp =
+            r.headers.get("content-disposition") ||
+            `attachment; filename="download.bin"`;
+          return new Response(r.body, {
+            status: 200,
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Disposition": disp,
+              ...CORS_HEADERS,
+            },
+          });
+        }
+
+        if (url.pathname === "/api/discovery/peers" && req.method === "GET") {
+          const portParam = Number(url.searchParams.get("port") || "0");
+          const peers = await discoverPeers(portParam > 0 ? portParam : undefined);
+          return jsonResponse({ peers });
+        }
+
+        if (url.pathname === "/api/job/preview" && req.method === "POST") {
+          const params = (await req.json()) as StartTransferJobParams;
+          const preview = await transferManager.previewBackupPlan(params);
+          return jsonResponse(preview);
         }
 
         // Transfer Job Controls
