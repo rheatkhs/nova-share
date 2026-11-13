@@ -113,4 +113,49 @@ describe("Phase 3: Local Web UI Dashboard & Remote Linux Explorer Proxy", () => 
     expect(Array.isArray(discData.peers)).toBe(true);
     expect(discData.peers.some((p: { ip: string; novaShareActive: boolean }) => p.ip === "127.0.0.1" && p.novaShareActive)).toBe(true);
   });
+
+  test("supports Route Quality diagnostics, Receiver file rename & delete, and Transfer History", async () => {
+    // 1. Route quality
+    const rqRes = await fetch(`${senderUrl}/api/discovery/route-quality`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ receiverUrl }),
+    });
+    expect(rqRes.status).toBe(200);
+    const rqData = await rqRes.json();
+    expect(rqData.routeKind).toBe("LOCAL");
+    expect(rqData.latencyMs).toBeGreaterThanOrEqual(1);
+
+    // 2. Remote rename & delete
+    const oldFile = path.join(tempDir, "omarchy-shared", "readme.txt");
+    const renRes = await fetch(`${senderUrl}/api/remote/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        receiverUrl,
+        token,
+        oldPath: oldFile,
+        newPath: "renamed-readme.txt",
+      }),
+    });
+    expect(renRes.status).toBe(200);
+
+    const renamedPath = path.join(tempDir, "omarchy-shared", "renamed-readme.txt");
+    const delRes = await fetch(`${senderUrl}/api/remote/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        receiverUrl,
+        token,
+        path: renamedPath,
+      }),
+    });
+    expect(delRes.status).toBe(200);
+
+    // 3. History endpoint
+    const histRes = await fetch(`${senderUrl}/api/history`);
+    expect(histRes.status).toBe(200);
+    const histData = await histRes.json();
+    expect(Array.isArray(histData.history)).toBe(true);
+  });
 });

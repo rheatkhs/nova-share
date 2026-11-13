@@ -11,7 +11,12 @@ import { safeCompareHex } from "../shared/hash.ts";
 import type { ReceiverSystemInfo, SyncPlanRequest } from "../shared/types.ts";
 import { receiveMicroBatch } from "./batch-receiver.ts";
 import { completeChunkedFile, receiveFileChunk } from "./chunk-receiver.ts";
-import { browseDirectory, createDirectory } from "./fs-browser.ts";
+import {
+  browseDirectory,
+  createDirectory,
+  deletePathOnDisk,
+  renamePathOnDisk,
+} from "./fs-browser.ts";
 import { createSyncPlan } from "./sync-planner.ts";
 
 export interface ReceiverServerOptions {
@@ -48,7 +53,7 @@ export function startReceiverServer(options: ReceiverServerOptions = {}): Receiv
   const server = Bun.serve({
     port,
     hostname,
-    maxRequestBodySize: 64 * 1024 * 1024, // Up to 64 MB per chunk/batch request
+    maxRequestBodySize: 128 * 1024 * 1024, // Up to 128 MB per Turbo Chunk request
     async fetch(req: Request): Promise<Response> {
       if (req.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -120,6 +125,20 @@ export function startReceiverServer(options: ReceiverServerOptions = {}): Receiv
               ...CORS_HEADERS,
             },
           });
+        }
+
+        // 3c. POST /api/fs/delete (Delete file or folder on Receiver)
+        if (url.pathname === "/api/fs/delete" && req.method === "POST") {
+          const body = (await req.json()) as { path: string };
+          const result = await deletePathOnDisk(body.path);
+          return jsonResponse(result);
+        }
+
+        // 3d. POST /api/fs/rename (Rename file or folder on Receiver)
+        if (url.pathname === "/api/fs/rename" && req.method === "POST") {
+          const body = (await req.json()) as { oldPath: string; newPath: string };
+          const result = await renamePathOnDisk(body.oldPath, body.newPath);
+          return jsonResponse(result);
         }
         // 4. POST /api/sync/plan
         if (url.pathname === "/api/sync/plan" && req.method === "POST") {
