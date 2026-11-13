@@ -1,0 +1,17 @@
+[Unit]
+Description=NovaShare Backup Receiver Daemon (Linux Omarchy)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Environment="NOVA_RECEIVER_PORT=7654"
+Environment="NOVA_TOKEN=novashare-secret-2026"
+ExecStart=/usr/local/bin/novashare-linux --receiver --port 7654
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
