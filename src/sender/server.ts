@@ -11,6 +11,7 @@ import {
   TransferManager,
   type StartTransferJobParams,
 } from "./transfer-manager.ts";
+import { loadUiAssets } from "../ui/assets.ts";
 
 export interface SenderServerOptions {
   port?: number;
@@ -220,8 +221,9 @@ export function startSenderServer(options: SenderServerOptions = {}): {
         }
 
         // Serve Web UI static assets if provided
-        if (options.uiHtmlProvider) {
-          const assets = await options.uiHtmlProvider();
+        const uiProvider = options.uiHtmlProvider ?? loadUiAssets;
+        if (uiProvider) {
+          const assets = await uiProvider();
           if (url.pathname === "/" || url.pathname === "/index.html") {
             return new Response(assets.html, {
               headers: { "Content-Type": "text/html; charset=utf-8" },
