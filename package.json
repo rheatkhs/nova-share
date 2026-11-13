@@ -8,8 +8,9 @@
     "start:sender": "bun run src/index.ts --sender",
     "start:receiver": "bun run src/index.ts --receiver",
     "test": "bun test",
-    "build:windows": "bun build src/index.ts --compile --target=bun-windows-x64 --outfile dist/novashare-windows.exe",
-    "build:linux": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/novashare-linux"
+    "build:ui": "bun build src/ui/client.tsx --outfile src/ui/app.js --target browser --minify",
+    "build:windows": "bun run build:ui && bun build src/index.ts --compile --target=bun-windows-x64 --outfile dist/novashare-windows.exe",
+    "build:linux": "bun run build:ui && bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/novashare-linux"
   },
   "keywords": [
     "backup",
@@ -21,5 +22,14 @@
     "windows"
   ],
   "author": "Rhea Takahashi",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "lucide-react": "^1.72.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
+  }
 }

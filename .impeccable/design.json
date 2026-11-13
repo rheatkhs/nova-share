@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-13T09:00:00.000Z",
+  "title": "Design System: NovaShare",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Carbon Zinc",
+        "canonical": "#18181b",
+        "tonalRamp": ["#09090b", "#18181b", "#27272a", "#3f3f46", "#52525b", "#71717a", "#d4d4d8", "#f4f4f5"]
+      },
+      "signal-blue": {
+        "role": "primary",
+        "displayName": "Signal Blue",
+        "canonical": "#1d4ed8",
+        "tonalRamp": ["#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#dbeafe"]
+      },
+      "verified-emerald": {
+        "role": "secondary",
+        "displayName": "Verified Emerald",
+        "canonical": "#047857",
+        "tonalRamp": ["#064e3b", "#065f46", "#047857", "#059669", "#10b981", "#34d399", "#6ee7b7", "#d1fae5"]
+      },
+      "in-flight-amber": {
+        "role": "tertiary",
+        "displayName": "In-Flight Amber",
+        "canonical": "#b45309",
+        "tonalRamp": ["#78350f", "#92400e", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fde68a", "#fef3c7"]
+      },
+      "bg-canvas": {
+        "role": "neutral",
+        "displayName": "Workstation Canvas",
+        "canonical": "#f4f4f5",
+        "tonalRamp": ["#09090b", "#18181b", "#27272a", "#52525b", "#a1a1aa", "#e4e4e7", "#f4f4f5", "#fafafa"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Operator Headline",
+        "purpose": "Top command bar application title."
+      },
+      "title": {
+        "displayName": "Bus Column Title",
+        "purpose": "Three-column Patch Bay section headers."
+      },
+      "body": {
+        "displayName": "Operational Body",
+        "purpose": "Directory entries, ledger rows, and status descriptions."
+      },
+      "label": {
+        "displayName": "Control Label",
+        "purpose": "Form field labels, badges, and button text."
+      },
+      "mono": {
+        "displayName": "Machine Voice Mono",
+        "purpose": "Filesystem paths, URLs, tokens, and SHA-256 verification logs."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease-out-expo",
+        "value": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "160ms-180ms state transitions on buttons, switches, progress bar, and signal matrix cells."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "lg", "value": "1180px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary execution button for initiating backup across the Dual-Lane pipeline.",
+      "html": "<button class=\"ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polygon points=\"6 3 20 12 6 21 6 3\"/></svg><span>Mulai Backup ke Linux Omarchy</span></button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; padding: 0 18px; border-radius: 6px; border: 1px solid transparent; background: #18181b; color: #fafafa; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: background-color 160ms cubic-bezier(0.22, 1, 0.36, 1); } .ds-btn-primary:hover { background: #27272a; } .ds-btn-primary:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Secondary operator control for directory browsing, link verification, and pause/resume.",
+      "html": "<button class=\"ds-btn-outline\">Verifikasi Link</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 6px; border: 1px solid #d4d4d8; background: #ffffff; color: #09090b; font-size: 0.8125rem; font-weight: 600; cursor: pointer; transition: background-color 160ms cubic-bezier(0.22, 1, 0.36, 1); } .ds-btn-outline:hover { background: #fafafa; } .ds-btn-outline:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }"
+    },
+    {
+      "name": "Path Input Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Monospace filesystem path and endpoint input with high-contrast focus ring.",
+      "html": "<input class=\"ds-input\" value=\"/home/user/NovaShare-Backups\" />",
+      "css": ".ds-input { height: 36px; width: 100%; border-radius: 6px; border: 1px solid #d4d4d8; background: #ffffff; color: #09090b; padding: 0 11px; font-family: 'JetBrains Mono', monospace; font-size: 0.8125rem; } .ds-input:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }"
+    },
+    {
+      "name": "Verified Status Badge",
+      "kind": "chip",
+      "refersTo": "badge-success",
+      "description": "Semantic status pill indicating online Linux Omarchy connection or completed verification.",
+      "html": "<span class=\"ds-badge-success\">Omarchy Online</span>",
+      "css": ".ds-badge-success { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 10px; font-size: 0.75rem; font-weight: 600; background: #d1fae5; color: #047857; }"
+    },
+    {
+      "name": "Reversed Telemetry Status Plate",
+      "kind": "card",
+      "refersTo": "telemetry-plate",
+      "description": "Single high-contrast reversed plate anchoring transfer percentage, byte progress, and MB/s speed.",
+      "html": "<div class=\"ds-plate\"><div><span class=\"ds-pct\">76%</span> <span class=\"ds-bytes\">188.8 GB / 248.5 GB</span></div><div class=\"ds-speed\">34.2 MB/s</div></div>",
+      "css": ".ds-plate { display: flex; justify-content: space-between; align-items: center; background: #09090b; color: #fafafa; border-radius: 8px; padding: 14px 18px; font-variant-numeric: tabular-nums; } .ds-pct { font-size: 2rem; font-weight: 800; letter-spacing: -0.03em; margin-right: 12px; } .ds-bytes { font-size: 0.8125rem; font-weight: 600; } .ds-speed { font-size: 1.125rem; font-weight: 700; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Dual-Bus Studio Patch Bay & Operator Deck",
+    "overview": "NovaShare approaches cross-platform backup not as a passive consumer cloud uploader, but as a precision benchtop routing deck connecting a Windows Laptop Source Bus, a central Dual-Lane Transfer Pipeline Bus, and a Linux Omarchy Destination Bus. Every pixel in the interface reports concrete filesystem paths, statfs partition capacity, or SHA-256 verification physics.",
+    "keyCharacteristics": [
+      "Three-Bus Architectural Patch Bay: A unified 1px hairline grid (1fr 1.35fr 1fr) where Source, Pipeline, and Destination sit side by side without nested card containers.",
+      "Single Reversed Status Plate: One high-contrast reversed plate (#09090b in light mode) anchors the primary transfer percentage, byte counter, and real-time throughput (MB/s and ETA).",
+      "Whole-Cell Signal Matrix: A 48-cell (16x3 desktop, 8x6 mobile) verification grid displaying verified (#047857), delta-skipped (#1d4ed8), active (#b45309), and pending chunks.",
+      "Inline Modal-Free Directory Exploration: Windows and remote Linux Omarchy directory trees live directly inside their respective bus columns alongside inline folder creation."
+    ],
+    "rules": [
+      {
+        "name": "The Single Reversed Plate Rule",
+        "body": "Exactly one element per screen—the primary telemetry readout plate (.ns-telemetry-plate)—may invert the ground to solid Carbon Black (#09090b) with alabaster type (#fafafa). No secondary panel or badge may compete with it.",
+        "section": "colors"
+      },
+      {
+        "name": "The State-Only Hue Rule",
+        "body": "Saturated colors (Signal Blue, Verified Emerald, In-Flight Amber, Fault Crimson) never appear as decorative backgrounds or borders; they encode live transfer or connection state only.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Numerals Rule",
+        "body": "Every element displaying bytes, percentages, file counts, throughput (MB/s), or ETA must enforce font-variant-numeric: tabular-nums so digits never jitter during high-frequency SSE updates.",
+        "section": "typography"
+      },
+      {
+        "name": "The Machine Voice Rule",
+        "body": "Monospace is reserved exclusively for filesystem paths, URLs, secret tokens, and terminal logs—never as a decorative label style.",
+        "section": "typography"
+      },
+      {
+        "name": "The Zero Ghost-Card Rule",
+        "body": "Elevation is declared once via a 1px structural hairline (#e4e4e7 light / #27272a dark). Pairing a 1px border with a soft drop shadow is prohibited.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use lucide-react icons at 1.75px stroke width (14px–20px) for all actions and status indicators.",
+      "Do keep Windows and Linux folder selection inline inside their respective Patch Bay columns.",
+      "Do apply .ns-tabular (font-variant-numeric: tabular-nums) to every byte count, speed, percentage, and file counter.",
+      "Do maintain a single outer border around the three-column Patch Bay with 1px internal dividers rather than wrapping each section in nested cards."
+    ],
+    "donts": [
+      "Don't place kickers or uppercase eyebrow labels above headings; let headings carry their own hierarchy.",
+      "Don't use emoji or Unicode symbols in place of Lucide vector icons.",
+      "Don't introduce modal dialogs for directory browsing or routine job configuration.",
+      "Don't combine 1px borders with drop shadows or glassmorphic backdrop-filter blurs."
+    ]
+  }
+}
