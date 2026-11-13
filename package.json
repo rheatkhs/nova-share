@@ -1,0 +1,25 @@
+{
+  "name": "nova-share",
+  "version": "1.0.0",
+  "description": "High-Throughput, Zero-Corruption Cross-Platform Backup & File Transfer Engine (Windows Laptop -> Linux Omarchy PC)",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.ts --dual",
+    "start:sender": "bun run src/index.ts --sender",
+    "start:receiver": "bun run src/index.ts --receiver",
+    "test": "bun test",
+    "build:windows": "bun build src/index.ts --compile --target=bun-windows-x64 --outfile dist/novashare-windows.exe",
+    "build:linux": "bun build src/index.ts --compile --target=bun-linux-x64 --outfile dist/novashare-linux"
+  },
+  "keywords": [
+    "backup",
+    "file-transfer",
+    "chunking",
+    "tailscale",
+    "bun",
+    "linux",
+    "windows"
+  ],
+  "author": "Rhea Takahashi",
+  "license": "MIT"
+}
