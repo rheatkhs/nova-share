@@ -10,7 +10,6 @@ import type { BrowseResponse, DirectoryEntry } from "../shared/types.ts";
 export async function getDiskSpace(targetPath: string): Promise<{ freeBytes: number; totalBytes: number }> {
   try {
     let checkPath = path.resolve(targetPath);
-    // Walk up if directory does not exist yet
     while (true) {
       try {
         await fs.access(checkPath);
@@ -35,28 +34,91 @@ export async function getDiskSpace(targetPath: string): Promise<{ freeBytes: num
 }
 
 /**
- * Lists directories (and files) at a given path on the Receiver machine.
+ * Returns quick-access drives and common folders for fast navigation.
+ */
+export async function getQuickRoots(): Promise<Array<{ label: string; path: string }>> {
+  const roots: Array<{ label: string; path: string }> = [];
+  const home = os.homedir();
+
+  if (os.platform() === "win32") {
+    // Detect available drive letters C:\ .. Z:\
+    const driveLetters = ["C", "D", "E", "F", "G", "H"];
+    for (const letter of driveLetters) {
+      const drivePath = `${letter}:\\`;
+      try {
+        await fs.access(drivePath);
+        roots.push({ label: `${letter}:`, path: drivePath });
+      } catch {
+        // Drive not mounted
+      }
+    }
+    const commonFolders = [
+      { label: "Home", path: home },
+      { label: "Desktop", path: path.join(home, "Desktop") },
+      { label: "Documents", path: path.join(home, "Documents") },
+      { label: "Downloads", path: path.join(home, "Downloads") },
+    ];
+    for (const item of commonFolders) {
+      try {
+        const st = await fs.stat(item.path);
+        if (st.isDirectory()) roots.push(item);
+      } catch {
+        // Skip missing
+      }
+    }
+  } else {
+    const linuxRoots = [
+      { label: "Home", path: home },
+      { label: "Backups", path: path.join(home, "NovaShare-Backups") },
+      { label: "/", path: "/" },
+      { label: "/mnt", path: "/mnt" },
+      { label: "/media", path: "/media" },
+    ];
+    for (const item of linuxRoots) {
+      try {
+        const st = await fs.stat(item.path);
+        if (st.isDirectory()) roots.push(item);
+      } catch {
+        // Skip missing
+      }
+    }
+  }
+
+  return roots;
+}
+
+/**
+ * Lists directories (and files) at a given path on the Receiver/Sender machine.
  */
 export async function browseDirectory(requestedPath?: string): Promise<BrowseResponse> {
   const defaultDir = path.join(os.homedir(), "NovaShare-Backups");
   let targetPath = requestedPath && requestedPath.trim() ? requestedPath.trim() : os.homedir();
   targetPath = path.resolve(targetPath);
 
-  // If requested path is the default backup dir and doesn't exist yet, create it
   if (targetPath === defaultDir) {
     await fs.mkdir(targetPath, { recursive: true }).catch(() => {});
   }
 
-  const stat = await fs.stat(targetPath);
-  if (!stat.isDirectory()) {
-    throw new Error(`Path is not a directory: ${targetPath}`);
+  // If the requested path does not exist yet, walk up to the nearest existing directory
+  while (true) {
+    try {
+      const st = await fs.stat(targetPath);
+      if (st.isDirectory()) break;
+      targetPath = path.dirname(targetPath);
+    } catch {
+      const parent = path.dirname(targetPath);
+      if (parent === targetPath) {
+        targetPath = os.homedir();
+        break;
+      }
+      targetPath = parent;
+    }
   }
 
   const dirents = await fs.readdir(targetPath, { withFileTypes: true });
   const entries: DirectoryEntry[] = [];
 
   for (const d of dirents) {
-    // Skip internal temporary files from directory browser clutter
     if (d.name.endsWith(".novapart") || d.name.endsWith(".novapart.meta.json")) {
       continue;
     }
@@ -72,11 +134,10 @@ export async function browseDirectory(requestedPath?: string): Promise<BrowseRes
         mtime: Math.floor(itemStat.mtimeMs),
       });
     } catch {
-      // Ignore broken symlinks or permission-denied entries
+      // Ignore locked system files (e.g. pagefile.sys, System Volume Information)
     }
   }
 
-  // Sort directories first, then alphabetically
   entries.sort((a, b) => {
     if (a.isDirectory !== b.isDirectory) {
       return a.isDirectory ? -1 : 1;
@@ -86,7 +147,10 @@ export async function browseDirectory(requestedPath?: string): Promise<BrowseRes
 
   const parentDir = path.dirname(targetPath);
   const parentPath = parentDir !== targetPath ? parentDir : null;
-  const { freeBytes, totalBytes } = await getDiskSpace(targetPath);
+  const [{ freeBytes, totalBytes }, roots] = await Promise.all([
+    getDiskSpace(targetPath),
+    getQuickRoots(),
+  ]);
 
   return {
     currentPath: targetPath,
@@ -96,11 +160,12 @@ export async function browseDirectory(requestedPath?: string): Promise<BrowseRes
     freeBytes,
     totalBytes,
     entries,
+    roots,
   };
 }
 
 /**
- * Creates a new directory on the Receiver machine.
+ * Creates a new directory on the Receiver/Sender machine.
  */
 export async function createDirectory(targetPath: string): Promise<{ path: string; created: boolean }> {
   if (!targetPath || !targetPath.trim()) {
