@@ -74,4 +74,43 @@ describe("Phase 3: Local Web UI Dashboard & Remote Linux Explorer Proxy", () => 
     const browse = await browseRes.json();
     expect(browse.entries.some((e: { name: string }) => e.name === "omarchy-shared")).toBe(true);
   });
+
+  test("supports Dry-Run preview, Receiver file download, and Peer Auto-Discovery", async () => {
+    const sampleFile = path.join(tempDir, "omarchy-shared", "readme.txt");
+    await fs.writeFile(sampleFile, "Downloaded from Receiver!");
+
+    // 1. Test Receiver file download via Sender proxy
+    const dlUrl = `${senderUrl}/api/remote/download?receiverUrl=${encodeURIComponent(
+      receiverUrl
+    )}&token=${encodeURIComponent(token)}&path=${encodeURIComponent(sampleFile)}`;
+    const dlRes = await fetch(dlUrl);
+    expect(dlRes.status).toBe(200);
+    const dlText = await dlRes.text();
+    expect(dlText).toBe("Downloaded from Receiver!");
+
+    // 2. Test Pre-Flight Dry-Run Preview
+    const destPreview = path.join(tempDir, "preview-dest");
+    const prevRes = await fetch(`${senderUrl}/api/job/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceDir: path.join(tempDir, "omarchy-shared"),
+        destinationDir: destPreview,
+        receiverUrl,
+        token,
+      }),
+    });
+    expect(prevRes.status).toBe(200);
+    const prevData = await prevRes.json();
+    expect(prevData.summary.totalFiles).toBe(1);
+    expect(prevData.summary.newCount).toBe(1);
+    expect(prevData.enoughSpace).toBe(true);
+
+    // 3. Test Peer Auto-Discovery
+    const discRes = await fetch(`${senderUrl}/api/discovery/peers?port=${receiver.port}`);
+    expect(discRes.status).toBe(200);
+    const discData = await discRes.json();
+    expect(Array.isArray(discData.peers)).toBe(true);
+    expect(discData.peers.some((p: { ip: string; novaShareActive: boolean }) => p.ip === "127.0.0.1" && p.novaShareActive)).toBe(true);
+  });
 });
