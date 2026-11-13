@@ -9,6 +9,23 @@ function timeoutAfter<T>(ms: number, fallback: T): Promise<T> {
   return promise;
 }
 
+/**
+ * Collects all IPv4 addresses belonging to THIS machine so we never mistake
+ * our own local interface for a remote peer's Direct LAN address.
+ */
+function getSelfIpSet(): Set<string> {
+  const ips = new Set<string>(["127.0.0.1", "localhost", "0.0.0.0"]);
+  const nets = os.networkInterfaces();
+  for (const addrs of Object.values(nets)) {
+    for (const addr of addrs || []) {
+      if (addr.family === "IPv4") {
+        ips.add(addr.address);
+      }
+    }
+  }
+  return ips;
+}
+
 async function probeNovaShareReceiver(url: string, timeoutMs = 450): Promise<boolean> {
   const check = (async () => {
     try {
@@ -31,7 +48,10 @@ async function probeNovaShareReceiver(url: string, timeoutMs = 450): Promise<boo
   return Promise.race([check, timeoutAfter(timeoutMs + 50, false)]);
 }
 
-async function queryTailscalePeers(receiverPort: number): Promise<DiscoveredPeer[]> {
+async function queryTailscalePeers(
+  receiverPort: number,
+  selfIps: Set<string>
+): Promise<DiscoveredPeer[]> {
   const task = (async (): Promise<DiscoveredPeer[]> => {
     try {
       const proc = Bun.spawn(["tailscale", "status", "--json"], {
@@ -43,6 +63,7 @@ async function queryTailscalePeers(receiverPort: number): Promise<DiscoveredPeer
       if (exitCode !== 0 || !text.trim().startsWith("{")) return [];
 
       const parsed = JSON.parse(text) as {
+        Self?: { TailscaleIPs?: string[] };
         Peer?: Record<
           string,
           {
@@ -56,17 +77,22 @@ async function queryTailscalePeers(receiverPort: number): Promise<DiscoveredPeer
         >;
       };
 
+      for (const selfTsIp of parsed.Self?.TailscaleIPs || []) {
+        selfIps.add(selfTsIp);
+      }
+
       const list: DiscoveredPeer[] = [];
       for (const peer of Object.values(parsed.Peer || {})) {
         const ipv4 = (peer.TailscaleIPs || []).find((ip) => !ip.includes(":"));
-        if (!ipv4) continue;
+        if (!ipv4 || selfIps.has(ipv4)) continue;
         const rawName = peer.HostName || peer.DNSName?.split(".")[0] || ipv4;
 
-        // If Tailscale reports a Direct LAN address (e.g. 192.168.11.136:41641), surface Direct LAN too!
+        // Only surface CurAddr as Direct LAN if it is a private IP AND NOT one of our own local IPs!
         if (peer.CurAddr) {
           const lanIp = peer.CurAddr.split(":")[0];
           if (
             lanIp &&
+            !selfIps.has(lanIp) &&
             (lanIp.startsWith("192.168.") ||
               lanIp.startsWith("10.") ||
               lanIp.startsWith("172."))
@@ -103,19 +129,25 @@ async function queryTailscalePeers(receiverPort: number): Promise<DiscoveredPeer
 }
 
 /**
- * Discovers Tailscale peers (via `tailscale status --json`) and local network interfaces,
- * probing each candidate on the Receiver port (7654) to see if NovaShare Receiver is active.
+ * Discovers remote Tailscale peers and local Receiver endpoints.
  */
 export async function discoverPeers(
   receiverPort = DEFAULT_RECEIVER_PORT
 ): Promise<DiscoveredPeer[]> {
+  const selfIps = getSelfIpSet();
   const candidates = new Map<string, DiscoveredPeer>();
 
-  // 1. Always include Localhost
+  // 1. Query remote Tailscale peers first
+  const tsPeers = await queryTailscalePeers(receiverPort, selfIps);
+  for (const p of tsPeers) {
+    candidates.set(`${p.source}:${p.ip}`, p);
+  }
+
+  // 2. Include 127.0.0.1 only as an explicit local test loopback
   const localHostName = os.hostname();
   const localUrl = `http://127.0.0.1:${receiverPort}`;
-  candidates.set("127.0.0.1", {
-    name: `${localHostName} (Localhost)`,
+  candidates.set("local:127.0.0.1", {
+    name: `${localHostName} (Tes Lokal 127.0.0.1)`,
     ip: "127.0.0.1",
     url: localUrl,
     os: os.platform(),
@@ -124,33 +156,7 @@ export async function discoverPeers(
     novaShareActive: false,
   });
 
-  // 2. Include local LAN / Tailscale interface IPs on this machine
-  const nets = os.networkInterfaces();
-  for (const [ifName, addrs] of Object.entries(nets)) {
-    for (const addr of addrs || []) {
-      if (addr.family === "IPv4" && !addr.internal) {
-        const isTailscale =
-          addr.address.startsWith("100.") || ifName.toLowerCase().includes("tailscale");
-        candidates.set(addr.address, {
-          name: `${localHostName} (${ifName})`,
-          ip: addr.address,
-          url: `http://${addr.address}:${receiverPort}`,
-          os: os.platform(),
-          source: isTailscale ? "tailscale" : "lan",
-          online: true,
-          novaShareActive: false,
-        });
-      }
-    }
-  }
-
-  // 3. Query Tailscale peers with strict 900ms bound
-  const tsPeers = await queryTailscalePeers(receiverPort);
-  for (const p of tsPeers) {
-    candidates.set(p.ip, p);
-  }
-
-  // 4. Probe online candidates in parallel with strict 500ms bound
+  // 3. Probe online candidates in parallel
   const peerList = Array.from(candidates.values());
   await Promise.all(
     peerList.map(async (peer) => {
@@ -160,9 +166,11 @@ export async function discoverPeers(
     })
   );
 
+  // Sort remote active peers first, local loopback last
   peerList.sort((a, b) => {
+    if (a.source === "local" && b.source !== "local") return 1;
+    if (a.source !== "local" && b.source === "local") return -1;
     if (a.novaShareActive !== b.novaShareActive) return a.novaShareActive ? -1 : 1;
-    if (a.source !== b.source) return a.source === "tailscale" ? -1 : 1;
     if (a.online !== b.online) return a.online ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
@@ -172,10 +180,10 @@ export async function discoverPeers(
 
 /**
  * Measures route latency and inspects Tailscale vs Direct LAN routing for a given Receiver URL.
- * Also checks if a faster alternate route (e.g. Direct LAN 192.168.x.x instead of Tailscale 100.x.y.z,
- * or Tailscale fallback when Direct LAN is unreachable) is available.
+ * Guarantees that `directLanUrl` and `fasterUrlAvailable` never point to the Sender's own IPs.
  */
 export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQualityInfo> {
+  const selfIps = getSelfIpSet();
   const cleanUrl = receiverUrl.trim().replace(/\/+$/, "");
   let parsedUrl: URL;
   try {
@@ -191,12 +199,11 @@ export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQua
   const host = parsedUrl.hostname;
   const port = Number(parsedUrl.port || DEFAULT_RECEIVER_PORT);
 
-  // Measure HTTP latency to currentUrl
   const t0 = performance.now();
   const currentReachable = await probeNovaShareReceiver(cleanUrl, 900);
   const latencyMs = currentReachable ? Math.max(1, Math.round(performance.now() - t0)) : 0;
 
-  if (host === "127.0.0.1" || host === "localhost") {
+  if (selfIps.has(host)) {
     return {
       currentUrl: cleanUrl,
       routeKind: "LOCAL",
@@ -204,7 +211,6 @@ export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQua
     };
   }
 
-  // Query Tailscale JSON to see if host matches a Tailscale peer or its CurAddr LAN IP
   let routeKind: RouteKind = host.startsWith("100.") ? "TAILSCALE_DIRECT" : "DIRECT_LAN";
   let relayCode: string | undefined;
   let directLanUrl: string | undefined;
@@ -221,6 +227,7 @@ export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQua
     ]);
     if (text.trim().startsWith("{")) {
       const parsed = JSON.parse(text) as {
+        Self?: { TailscaleIPs?: string[] };
         Peer?: Record<
           string,
           {
@@ -230,11 +237,18 @@ export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQua
           }
         >;
       };
+      for (const selfTsIp of parsed.Self?.TailscaleIPs || []) {
+        selfIps.add(selfTsIp);
+      }
+
       for (const peer of Object.values(parsed.Peer || {})) {
         const tsIp = (peer.TailscaleIPs || []).find((ip) => !ip.includes(":"));
-        const curLanIp = peer.CurAddr ? peer.CurAddr.split(":")[0] : "";
-        if (tsIp === host || curLanIp === host) {
-          if (tsIp) {
+        const rawCurIp = peer.CurAddr ? peer.CurAddr.split(":")[0] : "";
+        // Ignore CurAddr if it points to our own machine (hairpin reflection)
+        const curLanIp = rawCurIp && !selfIps.has(rawCurIp) ? rawCurIp : "";
+
+        if (tsIp === host || (curLanIp && curLanIp === host)) {
+          if (tsIp && !selfIps.has(tsIp)) {
             tailscaleUrl = `http://${tsIp}:${port}`;
           }
           if (
@@ -263,7 +277,6 @@ export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQua
 
   let fasterUrlAvailable: string | undefined;
 
-  // Case 1: User is on Tailscale IP, check if Direct LAN URL is reachable!
   if (routeKind !== "DIRECT_LAN" && directLanUrl && directLanUrl !== cleanUrl) {
     const lanOk = await probeNovaShareReceiver(directLanUrl, 450);
     if (lanOk) {
@@ -271,7 +284,6 @@ export async function inspectRouteQuality(receiverUrl: string): Promise<RouteQua
     }
   }
 
-  // Case 2: User is on Direct LAN IP, but it's unreachable (e.g. away from office) -> check Tailscale fallback!
   if (!currentReachable && tailscaleUrl && tailscaleUrl !== cleanUrl) {
     const tsOk = await probeNovaShareReceiver(tailscaleUrl, 650);
     if (tsOk) {
