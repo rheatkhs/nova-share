@@ -66,6 +66,15 @@ function formatEta(seconds: number | null): string {
   return `${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}d`;
 }
 
+function formatOsName(rawPlatform?: string): string {
+  if (!rawPlatform) return "OS";
+  const lower = rawPlatform.toLowerCase();
+  if (lower.startsWith("win32") || lower.includes("windows")) return "Windows";
+  if (lower.startsWith("linux")) return "Linux";
+  if (lower.startsWith("darwin") || lower.includes("mac")) return "macOS";
+  return rawPlatform.split(" ")[0] || rawPlatform;
+}
+
 const INITIAL_PROGRESS: TransferProgress = {
   state: "IDLE",
   jobId: null,
@@ -87,7 +96,7 @@ const INITIAL_PROGRESS: TransferProgress = {
   currentLane: null,
   currentChunkInfo: null,
   errorMessage: null,
-  recentLogs: ["[SIAP] Mesin Dual-Lane siap. Pilih pasangan folder Windows & Linux Omarchy."],
+  recentLogs: ["[SIAP] Mesin Dual-Lane siap. Pilih pasangan folder SENDER & RECEIVER."],
 };
 
 function NovaShareOperatorDeck() {
@@ -428,6 +437,10 @@ function NovaShareOperatorDeck() {
           ((remoteBrowse.totalBytes - remoteBrowse.freeBytes) / remoteBrowse.totalBytes) * 100
         )
       : 0;
+  const senderHost = localBrowse?.hostname || "Localhost";
+  const senderOs = formatOsName(localBrowse?.platform);
+  const receiverHost = remoteInfo?.hostname || remoteBrowse?.hostname || "Remote";
+  const receiverOs = formatOsName(remoteInfo?.platform || remoteBrowse?.platform);
 
   return (
     <div className="ns-shell">
@@ -440,7 +453,8 @@ function NovaShareOperatorDeck() {
           <div className="ns-brand__titles">
             <h1>NovaShare Operator Console</h1>
             <p className="ns-brand__sub">
-              Windows Workstation <ArrowRight className="ns-icon-inline" /> Linux Omarchy Dual-Lane Backup Bridge
+              SENDER ({senderHost} • {senderOs}) <ArrowRight className="ns-icon-inline" /> RECEIVER (
+              {connStatus === "online" ? `${receiverHost} • ${receiverOs}` : "Offline"})
             </p>
           </div>
         </div>
@@ -487,7 +501,7 @@ function NovaShareOperatorDeck() {
             {connStatus === "online" ? (
               <Badge variant="success" className="ns-conn-badge">
                 <Wifi className="ns-icon-xs" />
-                <span>{remoteInfo?.hostname || "Omarchy Online"}</span>
+                <span>RECEIVER: {receiverHost}</span>
               </Badge>
             ) : connStatus === "offline" ? (
               <Badge variant="destructive" className="ns-conn-badge">
@@ -518,7 +532,7 @@ function NovaShareOperatorDeck() {
         <div className="ns-alert-banner" role="alert">
           <AlertTriangle className="ns-icon-sm" />
           <span>
-            Koneksi ke Receiver Linux gagal (<code>{connError}</code>). Pastikan daemon berjalan di PC Omarchy atau cek IP Tailscale/Wi-Fi.
+            Koneksi ke RECEIVER gagal (<code>{connError}</code>). Pastikan daemon berjalan di mesin RECEIVER atau cek IP Tailscale/Wi-Fi.
           </span>
         </div>
       )}
@@ -530,16 +544,16 @@ function NovaShareOperatorDeck() {
           <div className="ns-bus__header">
             <div className="ns-bus__title-row">
               <Laptop className="ns-icon-sm ns-text-accent" />
-              <h2 id="bus-source-heading">Sumber Laptop (Windows)</h2>
+              <h2 id="bus-source-heading">
+                SENDER ({senderHost} • {senderOs})
+              </h2>
             </div>
-            <Badge variant="outline">
-              {localBrowse?.hostname || "Localhost"}
-            </Badge>
+            <Badge variant="outline">SENDER</Badge>
           </div>
 
           <div className="ns-bus__body">
             <label className="ns-field-label" htmlFor="source-dir-input">
-              Path Direktori Sumber
+              Path Direktori SENDER
             </label>
             <div className="ns-path-row">
               <Input
@@ -825,7 +839,7 @@ function NovaShareOperatorDeck() {
                 disabled={isJobRunning || progress.state === "PAUSED"}
               >
                 <Play className="ns-icon-sm" />
-                <span>Mulai Backup ke Linux Omarchy</span>
+                <span>Mulai Backup ke {connStatus === "online" ? receiverHost : "RECEIVER"}</span>
               </Button>
 
               <Button
@@ -913,7 +927,7 @@ function NovaShareOperatorDeck() {
                   <div className="ns-profiles-list">
                     {profiles.length === 0 ? (
                       <div className="ns-explorer__empty">
-                        Belum ada profil tersimpan. Pilih folder Windows &amp; Linux lalu simpan agar besok cukup 1 klik.
+                        Belum ada profil tersimpan. Pilih folder SENDER &amp; RECEIVER lalu simpan agar besok cukup 1 klik.
                       </div>
                     ) : (
                       profiles.map((prof) => (
@@ -956,11 +970,13 @@ function NovaShareOperatorDeck() {
           <div className="ns-bus__header">
             <div className="ns-bus__title-row">
               <HardDrive className="ns-icon-sm ns-text-success" />
-              <h2 id="bus-dest-heading">Tujuan PC Kantor (Linux Omarchy)</h2>
+              <h2 id="bus-dest-heading">
+                {connStatus === "online"
+                  ? `RECEIVER (${receiverHost} • ${receiverOs})`
+                  : "RECEIVER (Belum Terhubung)"}
+              </h2>
             </div>
-            <Badge variant="outline">
-              {remoteInfo?.platform ? remoteInfo.platform.split(" ")[0] : "Linux"}
-            </Badge>
+            <Badge variant="outline">RECEIVER</Badge>
           </div>
 
           <div className="ns-bus__body">
@@ -987,7 +1003,7 @@ function NovaShareOperatorDeck() {
             </div>
 
             <label className="ns-field-label" htmlFor="dest-dir-input">
-              Path Direktori Tujuan di Linux
+              Path Direktori RECEIVER
             </label>
             <div className="ns-path-row">
               <Input
@@ -1050,8 +1066,8 @@ function NovaShareOperatorDeck() {
                         void handleCreateFolder("remote");
                       }
                     }}
-                    placeholder="Folder baru di Linux..."
-                    aria-label="Buat folder baru di Linux Omarchy"
+                    placeholder="Folder baru di RECEIVER..."
+                    aria-label="Buat folder baru di RECEIVER"
                     className="ns-input--compact"
                   />
                   <Button

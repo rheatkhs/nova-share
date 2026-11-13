@@ -55,7 +55,7 @@ export class TransferManager {
     errorMessage: null,
     recentLogs: [
       "[SYSTEM] Dual-Lane Engine siap (Jalur A: Micro-Batch <8MB | Jalur B: Chunk Stream 8MB + SHA-256).",
-      "[SYSTEM] Pilih folder sumber Windows & tujuan Linux Omarchy, lalu klik Mulai Backup.",
+      "[SYSTEM] Pilih folder SENDER & tujuan RECEIVER, lalu klik Mulai Backup.",
     ],
   };
 
