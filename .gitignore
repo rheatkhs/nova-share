@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build & Compiled Binaries
+dist/
+*.exe
+novashare-linux
+
+# Runtime State & Local Config
+.novashare-config.json
+.novashare-state.json
+*.novapart
+*.novapart.meta.json
+.tmp-test/
+
+# Environment & Logs
+.env
+.env.*
+*.log
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
