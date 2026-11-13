@@ -161,3 +161,31 @@ export interface DryRunPreviewResponse {
   enoughSpace: boolean;
   summary: SyncPlanResponse["summary"];
 }
+
+export type RouteKind = "DIRECT_LAN" | "TAILSCALE_DIRECT" | "TAILSCALE_RELAY" | "LOCAL";
+
+export interface RouteQualityInfo {
+  currentUrl: string;
+  routeKind: RouteKind;
+  latencyMs: number;
+  relayCode?: string;
+  directLanUrl?: string;
+  tailscaleUrl?: string;
+  fasterUrlAvailable?: string;
+}
+
+export interface TransferHistoryEntry {
+  id: string;
+  startedAt: number;
+  finishedAt: number;
+  durationSec: number;
+  sourceDir: string;
+  destinationDir: string;
+  receiverUrl: string;
+  filesTransferred: number;
+  filesSkipped: number;
+  bytesTransferred: number;
+  bytesSkipped: number;
+  avgSpeedMBps: number;
+  state: TransferState;
+}

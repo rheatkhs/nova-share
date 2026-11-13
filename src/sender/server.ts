@@ -2,6 +2,7 @@ import { browseDirectory, createDirectory } from "../receiver/fs-browser.ts";
 import { APP_VERSION, DEFAULT_SENDER_PORT } from "../shared/constants.ts";
 import type { BackupProfile } from "../shared/types.ts";
 import {
+  clearTransferHistory,
   deleteBackupProfile,
   loadSenderConfig,
   saveSenderConfig,
@@ -12,7 +13,7 @@ import {
   type StartTransferJobParams,
 } from "./transfer-manager.ts";
 import { loadUiAssets } from "../ui/assets.ts";
-import { discoverPeers } from "./discovery.ts";
+import { discoverPeers, inspectRouteQuality } from "./discovery.ts";
 import { startProfileScheduler } from "./scheduler.ts";
 
 export interface SenderServerOptions {
@@ -233,6 +234,39 @@ export function startSenderServer(options: SenderServerOptions = {}): {
           return jsonResponse(data, r.status);
         }
 
+        if (url.pathname === "/api/remote/delete" && req.method === "POST") {
+          const { receiverUrl, token, path: remotePath } = (await req.json()) as {
+            receiverUrl: string;
+            token: string;
+            path: string;
+          };
+          const target = `${receiverUrl.replace(/\/+$/, "")}/api/fs/delete`;
+          const r = await fetch(target, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Nova-Token": token },
+            body: JSON.stringify({ path: remotePath }),
+          });
+          const data = await r.json();
+          return jsonResponse(data, r.status);
+        }
+
+        if (url.pathname === "/api/remote/rename" && req.method === "POST") {
+          const { receiverUrl, token, oldPath, newPath } = (await req.json()) as {
+            receiverUrl: string;
+            token: string;
+            oldPath: string;
+            newPath: string;
+          };
+          const target = `${receiverUrl.replace(/\/+$/, "")}/api/fs/rename`;
+          const r = await fetch(target, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Nova-Token": token },
+            body: JSON.stringify({ oldPath, newPath }),
+          });
+          const data = await r.json();
+          return jsonResponse(data, r.status);
+        }
+
         if (url.pathname === "/api/remote/download" && req.method === "GET") {
           const receiverUrl = url.searchParams.get("receiverUrl") || "";
           const token = url.searchParams.get("token") || "";
@@ -260,6 +294,22 @@ export function startSenderServer(options: SenderServerOptions = {}): {
           const portParam = Number(url.searchParams.get("port") || "0");
           const peers = await discoverPeers(portParam > 0 ? portParam : undefined);
           return jsonResponse({ peers });
+        }
+
+        if (url.pathname === "/api/discovery/route-quality" && req.method === "POST") {
+          const { receiverUrl } = (await req.json()) as { receiverUrl: string };
+          const info = await inspectRouteQuality(receiverUrl);
+          return jsonResponse(info);
+        }
+
+        if (url.pathname === "/api/history" && req.method === "GET") {
+          const cfg = await loadSenderConfig();
+          return jsonResponse({ history: cfg.history || [] });
+        }
+
+        if (url.pathname === "/api/history" && req.method === "DELETE") {
+          const cfg = await clearTransferHistory();
+          return jsonResponse({ history: cfg.history || [] });
         }
 
         if (url.pathname === "/api/job/preview" && req.method === "POST") {

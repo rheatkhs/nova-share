@@ -175,3 +175,44 @@ export async function createDirectory(targetPath: string): Promise<{ path: strin
   await fs.mkdir(resolved, { recursive: true });
   return { path: resolved, created: true };
 }
+
+/**
+ * Safely deletes a file or directory on the Receiver machine.
+ * Protects filesystem roots and user home root from accidental deletion.
+ */
+export async function deletePathOnDisk(
+  targetPath: string
+): Promise<{ path: string; deleted: boolean }> {
+  if (!targetPath || !targetPath.trim()) {
+    throw new Error("Target path is required");
+  }
+  const resolved = path.resolve(targetPath.trim());
+  const parent = path.dirname(resolved);
+  const home = path.resolve(os.homedir());
+  if (resolved === parent || resolved === home) {
+    throw new Error(`Refusing to delete protected root directory: ${resolved}`);
+  }
+  await fs.rm(resolved, { recursive: true, force: false });
+  return { path: resolved, deleted: true };
+}
+
+/**
+ * Renames a file or directory within its parent directory.
+ */
+export async function renamePathOnDisk(
+  oldPath: string,
+  newNameOrPath: string
+): Promise<{ oldPath: string; newPath: string; renamed: boolean }> {
+  if (!oldPath?.trim() || !newNameOrPath?.trim()) {
+    throw new Error("Both oldPath and newPath are required");
+  }
+  const resolvedOld = path.resolve(oldPath.trim());
+  const cleanNew = newNameOrPath.trim();
+  const resolvedNew =
+    cleanNew.includes("/") || cleanNew.includes("\\")
+      ? path.resolve(cleanNew)
+      : path.join(path.dirname(resolvedOld), cleanNew);
+
+  await fs.rename(resolvedOld, resolvedNew);
+  return { oldPath: resolvedOld, newPath: resolvedNew, renamed: true };
+}

@@ -12,6 +12,8 @@ import type {
 } from "../shared/types.ts";
 import { sendSmallFileBatches } from "./batch-sender.ts";
 import { sendLargeFileChunked } from "./chunk-sender.ts";
+import { appendTransferHistory } from "./config-store.ts";
+import { inspectRouteQuality } from "./discovery.ts";
 import { scanSourceDirectory } from "./scanner.ts";
 
 export interface StartTransferJobParams {
@@ -274,6 +276,21 @@ export class TransferManager {
         ? path.dirname(resolvedSource)
         : resolvedSource;
 
+      // Smart Dual-Route check: automatically switch to Direct LAN if reachable, or fallback to Tailscale if LAN is offline
+      let activeReceiverUrl = params.receiverUrl.trim().replace(/\/+$/, "");
+      try {
+        const routeInfo = await inspectRouteQuality(activeReceiverUrl);
+        if (routeInfo.fasterUrlAvailable) {
+          this.log(
+            `[SMART-ROUTE] Otomatis beralih ke jalur optimal: ${routeInfo.fasterUrlAvailable}`
+          );
+          activeReceiverUrl = routeInfo.fasterUrlAvailable;
+          this.progress.receiverUrl = activeReceiverUrl;
+          this.emit();
+        }
+      } catch {
+        // Keep user-supplied URL
+      }
       // 1. Scan source directory or selected files
       const scannedFiles = await scanSourceDirectory({
         sourceDir: resolvedSource,
@@ -298,7 +315,7 @@ export class TransferManager {
       this.emit();
 
       // 2. Request Sync Plan from Receiver
-      const planUrl = `${params.receiverUrl.replace(/\/+$/, "")}/api/sync/plan`;
+      const planUrl = `${activeReceiverUrl}/api/sync/plan`;
       const planRes = await fetch(planUrl, {
         method: "POST",
         headers: {
@@ -354,7 +371,7 @@ export class TransferManager {
         await sendSmallFileBatches({
           sourceDir: effectiveSourceDir,
           destinationDir: params.destinationDir,
-          receiverUrl: params.receiverUrl,
+          receiverUrl: activeReceiverUrl,
           token: params.token,
           items: smallItems,
           waitIfPausedOrOffline: () => this.waitIfPausedOrOffline(),
@@ -368,7 +385,7 @@ export class TransferManager {
             this.emit();
           },
           onNetworkDrop: (errMsg) =>
-            this.waitForReceiverRecovery(params.receiverUrl, params.token, errMsg),
+            this.waitForReceiverRecovery(activeReceiverUrl, params.token, errMsg),
         });
       }
 
@@ -388,7 +405,7 @@ export class TransferManager {
           await sendLargeFileChunked({
             sourceDir: effectiveSourceDir,
             destinationDir: params.destinationDir,
-            receiverUrl: params.receiverUrl,
+            receiverUrl: activeReceiverUrl,
             token: params.token,
             item,
             concurrency: params.concurrency || 2,
@@ -408,7 +425,7 @@ export class TransferManager {
               this.emit();
             },
             onNetworkDrop: (errMsg) =>
-              this.waitForReceiverRecovery(params.receiverUrl, params.token, errMsg),
+              this.waitForReceiverRecovery(activeReceiverUrl, params.token, errMsg),
           });
         }
       }
@@ -421,6 +438,24 @@ export class TransferManager {
         `Backup 100% completed! (${this.progress.filesCompleted} transferred, ${this.progress.filesSkipped} skipped, 0 corrupted).`
       );
       this.emit();
+
+      const durationSec = Math.max(1, Math.round((Date.now() - (this.progress.startedAt || Date.now())) / 1000));
+      await appendTransferHistory({
+        id: jobId,
+        startedAt: this.progress.startedAt || Date.now(),
+        finishedAt: Date.now(),
+        durationSec,
+        sourceDir: params.sourceDir,
+        destinationDir: params.destinationDir,
+        receiverUrl: activeReceiverUrl,
+        filesTransferred: this.progress.filesCompleted,
+        filesSkipped: this.progress.filesSkipped,
+        bytesTransferred: this.progress.bytesTransferred,
+        bytesSkipped: this.progress.bytesSkipped,
+        avgSpeedMBps: Number(((this.progress.bytesTransferred / (1024 * 1024)) / durationSec).toFixed(2)),
+        state: "COMPLETED",
+      }).catch(() => {});
+
       return this.getProgress();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
